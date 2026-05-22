@@ -66,7 +66,7 @@ function ChoosePathPanel({
   }, [defaultPath])
 
   async function handleBrowse() {
-    const picked = await window.electron.fs.selectDirectory()
+    const picked = await window.electron.fs.selectDirectory(selectedPath || undefined)
     if (picked) setSelectedPath(picked)
   }
 

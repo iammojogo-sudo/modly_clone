@@ -46,8 +46,8 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('fs:saveModel', defaultName),
     readFileBase64:    (filePath: string): Promise<string> =>
       ipcRenderer.invoke('fs:readFileBase64', filePath),
-    selectDirectory:   (): Promise<string | null> =>
-      ipcRenderer.invoke('fs:selectDirectory'),
+    selectDirectory:   (defaultPath?: string): Promise<string | null> =>
+      ipcRenderer.invoke('fs:selectDirectory', defaultPath),
     savePath:          (args: { filters: { name: string; extensions: string[] }[]; defaultPath?: string }): Promise<string | null> =>
       ipcRenderer.invoke('fs:savePath', args),
     listDir:           (dirPath: string): Promise<string[]> =>

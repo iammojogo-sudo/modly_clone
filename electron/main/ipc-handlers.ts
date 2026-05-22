@@ -586,11 +586,12 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
   })
 
   // Directory picker
-  ipcMain.handle('fs:selectDirectory', async () => {
+  ipcMain.handle('fs:selectDirectory', async (_event, defaultPath?: string) => {
     const win = getWindow()
     if (!win) return null
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory'],
+      ...(defaultPath && { defaultPath }),
     })
     return result.canceled ? null : result.filePaths[0]
   })
