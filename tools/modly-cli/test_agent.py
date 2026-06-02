@@ -127,6 +127,12 @@ class CommandTests(unittest.TestCase):
                     agent._workspace_relative_path(bad_url)
                 self.assertEqual(ctx.exception.code, "INVALID_WORKSPACE_PATH")
 
+    def test_workflow_workspace_path_rejects_unsafe_scene_candidate_path(self) -> None:
+        status = {"scene_candidate": {"workspace_path": "Agent/../secret.glb"}}
+        with self.assertRaises(agent.ModlyCliError) as ctx:
+            agent._workflow_workspace_path(status)
+        self.assertEqual(ctx.exception.code, "INVALID_WORKSPACE_PATH")
+
     def test_generate_uses_workflow_run_and_recovery_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             image = Path(td) / "robot.png"

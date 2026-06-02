@@ -704,7 +704,7 @@ def _canonical_generation_params(args: argparse.Namespace) -> dict[str, Any]:
 def _workflow_workspace_path(status: dict[str, Any]) -> str:
     scene_candidate = status.get("scene_candidate")
     if isinstance(scene_candidate, dict) and scene_candidate.get("workspace_path"):
-        return str(scene_candidate["workspace_path"])
+        return _validate_workspace_path(str(scene_candidate["workspace_path"]))
     output_url = str(status.get("output_url") or "")
     if output_url:
         return _workspace_relative_path(output_url)
