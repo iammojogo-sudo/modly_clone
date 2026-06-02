@@ -10,6 +10,7 @@ import { useAppStore }         from '@shared/stores/appStore'
 import { useExtensionsStore }  from '@shared/stores/extensionsStore'
 import { useNavStore }         from '@shared/stores/navStore'
 import { useWorkflowRunStore } from '@areas/workflows/workflowRunStore'
+import { useWaitButton } from '@areas/workflows/useWaitButton'
 import { buildAllWorkflowExtensions, getWorkflowExtension } from '@areas/workflows/mockExtensions'
 import { validateWorkflowPreflight } from '@areas/workflows/preflight'
 import type { WorkflowExtension } from '@areas/workflows/mockExtensions'
@@ -335,22 +336,7 @@ function TextParamRow({ nodeId, nodes, onPatch }: { nodeId: string; nodes: FlowN
 }
 
 function WaitParamRow({ nodeId }: { nodeId: string }) {
-  const waitState       = useWorkflowRunStore((s) => s.waitStates[nodeId])
-  const runningBranchId = useWorkflowRunStore((s) => s.runningBranchId)
-  const status          = useWorkflowRunStore((s) => s.runState.status)
-  const continueRun     = useWorkflowRunStore((s) => s.continueRun)
-
-  const otherBranchRunning = runningBranchId !== null && runningBranchId !== nodeId
-  const inPrePhase  = status === 'running' && runningBranchId === null
-  const isRunning   = waitState === 'running'
-  const canContinue = (waitState === 'pending' || waitState === 'done' || waitState === 'error') && !otherBranchRunning && !inPrePhase
-  const label       = waitState === 'done' || waitState === 'error' ? 'Retry' : 'Continue'
-
-  const buttonClass = waitState === 'error'
-    ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25'
-    : waitState === 'done'
-    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25'
-    : 'bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25'
+  const { waitState, canContinue, isRunning, label, buttonClass, onContinue } = useWaitButton(nodeId)
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -362,7 +348,7 @@ function WaitParamRow({ nodeId }: { nodeId: string }) {
       </div>
       {waitState ? (
         <button
-          onClick={() => continueRun(nodeId)}
+          onClick={onContinue}
           disabled={!canContinue}
           className={`w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md border transition-colors text-[11px] font-medium ${buttonClass} ${
             canContinue ? (waitState === 'pending' ? 'animate-pulse' : '') : 'opacity-40 cursor-not-allowed'

@@ -268,6 +268,23 @@ async function executeExtensionNode(
   }
 }
 
+// ─── Wait dependency helpers ───────────────────────────────────────────────────
+
+/** All Waits nested (transitively) under `rootId`, via the parentWait chain. */
+function descendantWaits(rootId: string, ctx: RunContext): Set<string> {
+  const out = new Set<string>()
+  let frontier = new Set<string>([rootId])
+  while (frontier.size > 0) {
+    const next = new Set<string>()
+    for (const w of ctx.waitIds) {
+      const parent = ctx.parentWait.get(w)
+      if (parent && frontier.has(parent) && !out.has(w)) { out.add(w); next.add(w) }
+    }
+    frontier = next
+  }
+  return out
+}
+
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 interface WorkflowRunStore {
@@ -441,7 +458,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
 
         // Pre-phase: nodes that don't belong to any single branch (sources + merges).
         for (let i = 0; i < preExecExtNodes.length; i++) {
-          if (_cancel.current) { set({ runState: IDLE, activeNodeId: null }); return }
+          if (_cancel.current) { _ctx.current = null; set({ runState: IDLE, activeNodeId: null }); return }
           const node = preExecExtNodes[i]
           set((s) => ({
             activeNodeId: node.id,
@@ -478,17 +495,26 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
       if (!ctx) return
 
       const branch = ctx.branches.get(waitId) ?? []
+      // Re-running a Wait invalidates everything downstream: descendant branches
+      // were computed against the old output, so drop their outputs and reset
+      // them to blocked until this branch produces a fresh result.
+      const descendants = descendantWaits(waitId, ctx)
 
       _cancel.current = false
 
       // Reset outputs for this branch's nodes so Retry re-executes cleanly.
       for (const node of branch) ctx.nodeOutputs.delete(node.id)
+      for (const d of descendants) for (const node of ctx.branches.get(d) ?? []) ctx.nodeOutputs.delete(node.id)
 
-      set((s) => ({
-        runningBranchId: waitId,
-        waitStates:      { ...s.waitStates, [waitId]: 'running' as WaitState },
-        runState:        { ...s.runState, status: 'running', blockIndex: 0, blockTotal: branch.length, blockProgress: 0, blockStep: branch.length === 0 ? 'Done' : 'Starting…' },
-      }))
+      set((s) => {
+        const waitStates = { ...s.waitStates, [waitId]: 'running' as WaitState }
+        for (const d of descendants) waitStates[d] = 'blocked'
+        return {
+          runningBranchId: waitId,
+          waitStates,
+          runState: { ...s.runState, status: 'running', blockIndex: 0, blockTotal: branch.length, blockProgress: 0, blockStep: branch.length === 0 ? 'Done' : 'Starting…' },
+        }
+      })
 
       const finishBranch = (next: WaitState, err?: string): void => {
         if (_cancel.current) return
@@ -497,6 +523,13 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
         if (next === 'done') {
           for (const w of ctx.waitIds) {
             if (ctx.parentWait.get(w) === waitId && newWaitStates[w] === 'blocked') newWaitStates[w] = 'pending'
+          }
+        }
+        // A failed branch can never feed its descendants — surface them as error
+        // too, otherwise they stay 'blocked' and the run hangs on 'paused' forever.
+        if (next === 'error') {
+          for (const d of descendantWaits(waitId, ctx)) {
+            if (newWaitStates[d] === 'blocked') newWaitStates[d] = 'error'
           }
         }
         const allFinished = ctx.waitIds.every((id) => newWaitStates[id] === 'done' || newWaitStates[id] === 'error')

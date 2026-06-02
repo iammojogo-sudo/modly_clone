@@ -1,32 +1,16 @@
 import { Handle, Position } from '@xyflow/react'
 import type { WFNodeData } from '@shared/types/electron.d'
-import { useWorkflowRunStore } from '../workflowRunStore'
+import { useWaitButton } from '../useWaitButton'
 import BaseNode from './BaseNode'
 
 const HANDLE_STYLE = { background: '#71717a', width: 14, height: 14, border: '2.5px solid #18181b' }
 
 export default function WaitNode({ id, data, selected }: { id: string; data: WFNodeData; selected?: boolean }) {
-  const waitState       = useWorkflowRunStore((s) => s.waitStates[id])
-  const runningBranchId = useWorkflowRunStore((s) => s.runningBranchId)
-  const status          = useWorkflowRunStore((s) => s.runState.status)
-  const continueRun     = useWorkflowRunStore((s) => s.continueRun)
-
-  const otherBranchRunning = runningBranchId !== null && runningBranchId !== id
-  // Pre-phase: shared nodes (e.g. Generate Mesh) still running before any branch hands off.
-  const inPrePhase  = status === 'running' && runningBranchId === null
-  const isRunning   = waitState === 'running'
-  const canContinue = (waitState === 'pending' || waitState === 'done' || waitState === 'error') && !otherBranchRunning && !inPrePhase
-  const label       = waitState === 'done' ? 'Retry' : waitState === 'error' ? 'Retry' : 'Continue'
-
-  const buttonClass = waitState === 'error'
-    ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25'
-    : waitState === 'done'
-    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25'
-    : 'bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25'
+  const { waitState, canContinue, isRunning, label, buttonClass, statusText, onContinue } = useWaitButton(id)
 
   const subheader = waitState ? (
     <button
-      onClick={() => continueRun(id)}
+      onClick={onContinue}
       disabled={!canContinue}
       className={`nodrag w-full flex items-center justify-center gap-1.5 px-2.5 py-2 border-y transition-colors text-[10px] font-medium ${buttonClass} ${
         canContinue ? (waitState === 'pending' ? 'animate-pulse' : '') : 'opacity-40 cursor-not-allowed'
@@ -49,16 +33,6 @@ export default function WaitNode({ id, data, selected }: { id: string; data: WFN
       )}
     </button>
   ) : undefined
-
-  const statusText =
-    waitState === 'blocked' ? 'Waiting for the previous Wait to finish…' :
-    waitState === 'running' ? 'Branch in progress…' :
-    waitState === 'done'    ? 'Branch finished — Retry to re-run.' :
-    waitState === 'error'   ? 'Branch failed — Retry to re-run.' :
-    waitState === 'pending' && inPrePhase ? 'Waiting for upstream nodes…' :
-    waitState === 'pending' && otherBranchRunning ? 'Another branch is running…' :
-    waitState === 'pending' ? 'Workflow paused — click Continue to run this branch.' :
-    'Pauses the workflow until you click Continue.'
 
   return (
     <BaseNode
