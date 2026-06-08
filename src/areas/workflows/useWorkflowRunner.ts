@@ -151,12 +151,15 @@ export function useWorkflowRunner(allExtensions: WorkflowExtension[]) {
           // ── Generator: call Python FastAPI ──────────────────────────────────
           // For multi-input nodes, use the resolved image path (not the global imagePath)
           const activeImagePath = nodeInputPath ?? imagePath
+          if (!imageData && (!activeImagePath || activeImagePath.trim().length === 0)) {
+            throw new Error('No input image selected for model node')
+          }
           const base64 = imageData && nodeInputPath === undefined
             ? imageData
-            : await window.electron.fs.readFileBase64(activeImagePath)
+            : await window.electron.fs.readFileBase64(activeImagePath as string)
           const bytes  = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
           const blob   = new Blob([bytes], { type: 'image/png' })
-          const fname  = activeImagePath.split(/[\\/]/).pop() ?? 'image.png'
+          const fname  = activeImagePath?.split(/[\\/]/).pop() ?? 'image.png'
 
           // For multi-input nodes: inject the mesh input as params.mesh_path
           const extraParams: Record<string, unknown> = {}

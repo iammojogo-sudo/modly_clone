@@ -90,7 +90,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
       (n.type === 'extensionNode' || n.type === 'waitNode') && n.data.enabled,
     )
 
-    const selectedImagePath = appState.selectedImagePath ?? ''
+    const selectedImagePath = appState.selectedImagePath ?? undefined
     const selectedImageData = overrideImageData ?? appState.selectedImageData ?? undefined
     const currentMeshUrl    = appState.currentJob?.outputUrl
 
@@ -102,7 +102,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
 
     appState.setCurrentJob({
       id: crypto.randomUUID(),
-      imageFile: selectedImagePath,
+      imageFile: selectedImagePath ?? '__workflow__',
       status: 'generating',
       progress: 0,
       createdAt: Date.now(),
@@ -212,12 +212,15 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
 
         if (isModelNode) {
           const activeImagePath = nodeInputPath ?? selectedImagePath
+          if (!selectedImageData && (!activeImagePath || activeImagePath.trim().length === 0)) {
+            throw new Error('No input image selected for model node')
+          }
           const base64 = selectedImageData && nodeInputPath === undefined
             ? selectedImageData
-            : await window.electron.fs.readFileBase64(activeImagePath)
+            : await window.electron.fs.readFileBase64(activeImagePath as string)
           const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
           const blob  = new Blob([bytes], { type: 'image/png' })
-          const fname = activeImagePath.split(/[\\/]/).pop() ?? 'image.png'
+          const fname = activeImagePath?.split(/[\\/]/).pop() ?? 'image.png'
 
           // For multi-input nodes: inject mesh path as params.mesh_path
           const extraParams: Record<string, unknown> = {}

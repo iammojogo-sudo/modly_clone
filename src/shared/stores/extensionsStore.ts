@@ -27,6 +27,7 @@ interface ExtensionsStore {
 
   loadExtensions:    () => Promise<void>
   installFromGitHub: (url: string) => Promise<{ success: boolean; error?: string }>
+  installFromLocal:  () => Promise<{ success: boolean; error?: string; cancelled?: boolean }>
   uninstall:         (extensionId: string) => Promise<{ success: boolean; error?: string }>
   reload:            () => Promise<void>
   clearInstallState: () => void
@@ -60,6 +61,18 @@ export const useExtensionsStore = create<ExtensionsStore>((set, get) => ({
 
   async installFromGitHub(url: string) {
     return installExtension(() => window.electron.extensions.installFromGitHub(url), set)
+  },
+
+  // ── Install from local folder ──────────────────────────────────────────────
+
+  async installFromLocal() {
+    const result = await installExtension(() => window.electron.extensions.installFromLocal(), set)
+    // If user cancelled the folder picker, treat as a no-op (not an error)
+    if ((result as any).cancelled) {
+      set({ installProgress: null, installError: null })
+      return { success: false, cancelled: true }
+    }
+    return result
   },
 
   // ── Uninstall ──────────────────────────────────────────────────────────────

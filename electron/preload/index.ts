@@ -153,10 +153,17 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('extensions:list'),
 
     installFromGitHub: (url: string): Promise<{
-      success: boolean; error?: string
+      success: boolean; error?: string; cancelled?: boolean
       extensionId?: string
       extension?: unknown
     }> => ipcRenderer.invoke('extensions:installFromGitHub', url),
+
+    installFromLocal: (): Promise<{
+      success: boolean; error?: string; cancelled?: boolean
+      extensionId?: string
+      extension?: unknown
+      localPath?: string
+    }> => ipcRenderer.invoke('extensions:installFromLocal'),
 
     uninstall: (extensionId: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('extensions:uninstall', extensionId),

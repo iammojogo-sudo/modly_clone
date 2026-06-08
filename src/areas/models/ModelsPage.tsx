@@ -18,6 +18,7 @@ export default function ModelsPage(): JSX.Element {
   const loadErrors        = useExtensionsStore((s) => s.loadErrors)
   const loadExtensions    = useExtensionsStore((s) => s.loadExtensions)
   const installFromGH     = useExtensionsStore((s) => s.installFromGitHub)
+  const installFromLocal  = useExtensionsStore((s) => s.installFromLocal)
   const uninstallExt      = useExtensionsStore((s) => s.uninstall)
   const reloadExtensions  = useExtensionsStore((s) => s.reload)
   const clearInstall      = useExtensionsStore((s) => s.clearInstallState)
@@ -139,7 +140,17 @@ export default function ModelsPage(): JSX.Element {
     }
   }
 
-  // ── Uninstall extension ────────────────────────────────────────────────────
+  // ── Local extension install ──────────────────────────────────────────
+
+  async function handleLocalInstall() {
+    setGhErr(null)
+    clearInstall()
+    const result = await installFromLocal()
+    if ('cancelled' in result && result.cancelled) return   // user dismissed dialog
+    if (!result.success) setGhErr(result.error ?? 'Installation failed')
+  }
+
+  // ── Uninstall extension ──────────────────────────────────────────
 
   function openUninstallModal(extId: string) {
     const ext = allExtensions.find((e) => e.id === extId)
@@ -200,6 +211,7 @@ export default function ModelsPage(): JSX.Element {
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-base font-semibold text-zinc-100">Extensions</h1>
           <div className="flex items-center gap-2">
+            {/* GitHub install button */}
             <button
               onClick={() => {
                 setShowGHForm((v) => !v)
@@ -212,6 +224,21 @@ export default function ModelsPage(): JSX.Element {
                 <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.085 1.84 1.237 1.84 1.237 1.07 1.835 2.807 1.305 3.492.997.108-.776.418-1.305.762-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.468-2.38 1.235-3.22-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.3 1.23A11.51 11.51 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.29-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.91 1.235 3.22 0 4.61-2.805 5.625-5.475 5.92.43.372.823 1.102.823 2.222 0 1.606-.015 2.896-.015 3.286 0 .322.216.694.825.576C20.565 21.796 24 17.298 24 12c0-6.63-5.37-12-12-12z"/>
               </svg>
               {showGHForm ? 'Cancel' : 'Install from GitHub'}
+            </button>
+
+            {/* Local folder link button */}
+            <button
+              onClick={handleLocalInstall}
+              disabled={isInstalling}
+              title="Link a local extension folder"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-zinc-800/80 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-all border border-zinc-700/60 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                <line x1="12" y1="11" x2="12" y2="17"/>
+                <line x1="9" y1="14" x2="15" y2="14"/>
+              </svg>
+              Link local folder
             </button>
           </div>
         </div>
@@ -406,6 +433,7 @@ export default function ModelsPage(): JSX.Element {
                 }}
                 onUninstall={(extId) => openUninstallModal(extId)}
                 onRepaired={() => reloadExtensions()}
+                onSynced={() => reloadExtensions()}
               />
             ))}
           </div>

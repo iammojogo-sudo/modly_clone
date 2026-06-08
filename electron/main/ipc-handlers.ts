@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, dialog, app, shell } from 'electron'
 import { buildSync } from 'esbuild'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
-import { rm as rmAsync, readFile, writeFile, mkdir, readdir, rename, cp } from 'fs/promises'
+import { rm as rmAsync, readFile, writeFile, mkdir, readdir, rename, cp, symlink, lstat } from 'fs/promises'
 import { existsSync, readdirSync, statSync } from 'fs'
 import axios from 'axios'
 import * as tar from 'tar'
@@ -398,6 +398,9 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
 
   // Read local file → base64 (bypasses file:// restrictions in the renderer)
   ipcMain.handle('fs:readFileBase64', async (_, filePath: string) => {
+    if (typeof filePath !== 'string' || filePath.trim().length === 0) {
+      throw new Error('fs:readFileBase64 requires a non-empty file path')
+    }
     const buffer = await readFile(filePath)
     return buffer.toString('base64')
   })
@@ -802,15 +805,38 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
       if (!existsSync(dir)) return []
       try {
         const entries = await readdir(dir, { withFileTypes: true })
-        const dirs    = entries.filter(e => e.isDirectory())
+        // On Windows, junction points are reported by Node.js as isSymbolicLink()=true,
+        // isDirectory()=false. Use statSync (which follows links) as the authoritative check.
+        const dirs = entries.filter(e => {
+          if (e.isDirectory()) return true
+          if (e.isSymbolicLink()) {
+            try { return statSync(join(dir, e.name)).isDirectory() } catch { return false }
+          }
+          return false
+        })
         return Promise.all(dirs.map(async (entry) => {
           const base = { type: 'model' as const, id: entry.name, name: entry.name, trusted: isBuiltin, builtin: isBuiltin, nodes: [] }
+          const entryPath = join(dir, entry.name)
+
+          // Detect local extensions: check for .modly-local sentinel
+          let localSourcePath: string | undefined
+          if (!isBuiltin) {
+            const sentinelPath = join(entryPath, '.modly-local')
+            if (existsSync(sentinelPath)) {
+              try {
+                localSourcePath = (await readFile(sentinelPath, 'utf-8')).trim()
+              } catch { /* ignore */ }
+            }
+          }
+
           for (const manifestFile of ['manifest.json', 'package.json']) {
-            const p = join(dir, entry.name, manifestFile)
+            const p = join(entryPath, manifestFile)
             if (existsSync(p)) {
               try {
                 const raw    = await readFile(p, 'utf-8')
                 const parsed = JSON.parse(raw) as ParsedManifest
+                // Inject local:// source so the UI shows the Local badge
+                if (localSourcePath) parsed.source = `local://${localSourcePath}`
                 return parseExtensionManifest(parsed, entry.name, trustedRepos, isBuiltin)
               } catch { /* ignore parse errors, fall through */ }
             }
@@ -1057,6 +1083,99 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
       return { success: true }
     } catch (err: any) {
       return { success: false, error: `Repair failed: ${err?.message ?? err}` }
+    }
+  })
+
+  // Install a local extension by creating a symlink/junction to a local folder
+  ipcMain.handle('extensions:installFromLocal', async (event) => {
+    const win  = getWindow()
+    const emit = (data: object) => win?.webContents.send('extensions:installProgress', data)
+
+    // 1. Open folder picker
+    const pickResult = await dialog.showOpenDialog(win!, {
+      title:      'Select local extension folder',
+      properties: ['openDirectory'],
+    })
+    if (pickResult.canceled || pickResult.filePaths.length === 0) {
+      return { success: false, cancelled: true }
+    }
+    const localPath = pickResult.filePaths[0]
+
+    try {
+      emit({ step: 'validating' })
+
+      // 2. Read and validate manifest.json
+      const manifestPath = join(localPath, 'manifest.json')
+      if (!existsSync(manifestPath)) {
+        throw new Error('manifest.json not found in the selected folder')
+      }
+      const manifestRaw = await readFile(manifestPath, 'utf-8')
+      const manifest    = JSON.parse(manifestRaw) as ParsedManifest
+
+      const { id: rawManifestId } = validateInstallManifest(
+        manifest,
+        {
+          hasEntryFile:     (candidate) => existsSync(join(localPath, candidate)),
+          hasGeneratorFile: ()          => existsSync(join(localPath, 'generator.py')),
+        },
+        'local folder',
+      )
+      const extensionId = assertSafeExtensionId(rawManifestId)
+
+      // 3. Create symlink / junction in extensionsDir
+      const userData      = app.getPath('userData')
+      const extensionsDir = getSettings(userData).extensionsDir
+      await mkdir(extensionsDir, { recursive: true })
+
+      const linkPath = resolveExtensionPathWithinRoot(extensionsDir, extensionId)
+
+      // Remove any existing symlink/dir at that location
+      if (existsSync(linkPath)) {
+        // Check if it's already linked to the same path
+        try {
+          const stat = await lstat(linkPath)
+          if (stat.isSymbolicLink() || (process.platform === 'win32' && stat.isDirectory())) {
+            await rmAsync(linkPath, { recursive: true, force: true })
+          } else {
+            throw new Error(`A non-symlink folder named "${extensionId}" already exists in extensionsDir. Remove it first.`)
+          }
+        } catch (e: any) {
+          if (e.message?.includes('already exists')) throw e
+          await rmAsync(linkPath, { recursive: true, force: true })
+        }
+      }
+
+      emit({ step: 'setting_up', message: 'Linking local folder…' })
+
+      if (process.platform === 'win32') {
+        // Windows: junction (no elevation needed, works for directories)
+        await symlink(localPath, linkPath, 'junction')
+      } else {
+        // macOS / Linux: standard symlink
+        await symlink(localPath, linkPath)
+      }
+
+      // Write sentinel so extensions:list can detect this as a local extension
+      // The sentinel lives in the linked folder (= the original local folder), so
+      // it persists even if Modly is restarted. The content is the absolute path.
+      await writeFile(join(linkPath, '.modly-local'), localPath, 'utf-8')
+
+      // 4. Hot-reload Python registry so it picks up the new extension
+      try {
+        await axios.post(`${API_BASE_URL}/extensions/reload`, {}, { timeout: 10_000 })
+      } catch { /* Python might not be running yet */ }
+
+      emit({ step: 'done', extensionId })
+
+      const trustedRepos = await fetchTrustedRepos()
+      // Build manifest with localPath marker so the UI can identify local extensions
+      const annotatedManifest = { ...manifest, source: `local://${localPath}` }
+      const ext = parseExtensionManifest(annotatedManifest, extensionId, trustedRepos)
+      return { success: true, extensionId, extension: ext, localPath }
+
+    } catch (err) {
+      emit({ step: 'error', message: String(err) })
+      return { success: false, error: String(err) }
     }
   })
 

@@ -25,6 +25,7 @@ interface Props {
   onUninstall:      (extId: string) => void
   onUninstallNode?: (fullId: string) => void
   onRepaired?:      () => void
+  onSynced?:        () => void
 }
 
 const TYPE_BADGE: Record<string, { label: string; cls: string }> = {
@@ -43,9 +44,14 @@ function TruncatedText({
   return <span className={className}>{text}</span>
 }
 
-export function ExtensionCard({ ext, installedIds, downloading, loadError, disabled, onInstall, onPauseDownload, onCancelDownload, onUninstall, onUninstallNode, onRepaired }: Props): JSX.Element {
+export function ExtensionCard({ ext, installedIds, downloading, loadError, disabled, onInstall, onPauseDownload, onCancelDownload, onUninstall, onUninstallNode, onRepaired, onSynced }: Props): JSX.Element {
   const [repairing,   setRepairing]   = useState(false)
   const [repairError, setRepairError] = useState<string | null>(null)
+  const [syncing,     setSyncing]     = useState(false)
+  const [syncError,   setSyncError]   = useState<string | null>(null)
+
+  const isLocal = typeof ext.source === 'string' && ext.source.startsWith('local://')
+  const localPath = isLocal ? ext.source!.replace('local://', '') : null
 
   const badge = TYPE_BADGE[ext.type] ?? TYPE_BADGE.model
 
@@ -58,6 +64,23 @@ export function ExtensionCard({ ext, installedIds, downloading, loadError, disab
       onRepaired?.()
     } else {
       setRepairError(result.error ?? 'Repair failed')
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true)
+    setSyncError(null)
+    try {
+      const result = await window.electron.extensions.reload()
+      if (!result.success) {
+        setSyncError(result.error ?? 'Sync failed')
+      } else {
+        onSynced?.()
+      }
+    } catch (e) {
+      setSyncError(String(e))
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -95,6 +118,19 @@ export function ExtensionCard({ ext, installedIds, downloading, loadError, disab
               {badge.label}
             </span>
 
+            {/* Local badge */}
+            {isLocal && (
+              <span
+                title={localPath ?? ''}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-orange-500/15 border border-orange-500/25 text-orange-400 text-[10px] font-semibold shrink-0 cursor-default"
+              >
+                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                </svg>
+                Local
+              </span>
+            )}
+
             {/* Trust badge — only shown for official extensions */}
             {ext.trusted && (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-zinc-800/80 border border-zinc-700/40 text-zinc-400 text-[10px] font-medium shrink-0">
@@ -119,29 +155,70 @@ export function ExtensionCard({ ext, installedIds, downloading, loadError, disab
 
         {/* Uninstall button */}
         {!ext.builtin && (
-          <button
-            onClick={() => onUninstall(ext.id)}
-            disabled={disabled}
-            title={disabled ? 'Cannot uninstall while an install is in progress' : 'Uninstall extension'}
-            className="shrink-0 p-1.5 rounded-lg text-zinc-700 hover:text-red-400 hover:bg-red-950/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-zinc-700 disabled:hover:bg-transparent"
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-              <path d="M10 11v6M14 11v6"/>
-              <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
-            </svg>
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Sync button — only for local extensions */}
+            {isLocal && (
+              <button
+                onClick={handleSync}
+                disabled={syncing || disabled}
+                title={syncing ? 'Syncing…' : 'Sync — reload extension from local folder'}
+                className="p-1.5 rounded-lg text-zinc-600 hover:text-orange-400 hover:bg-orange-950/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <svg
+                  width="11" height="11" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                  className={syncing ? 'animate-spin' : ''}
+                >
+                  <polyline points="23 4 23 10 17 10"/>
+                  <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                </svg>
+              </button>
+            )}
+            <button
+              onClick={() => onUninstall(ext.id)}
+              disabled={disabled}
+              title={isLocal
+                ? (disabled ? 'Cannot unlink while an install is in progress' : 'Unlink local extension (removes symlink only, keeps source folder)')
+                : (disabled ? 'Cannot uninstall while an install is in progress' : 'Uninstall extension')}
+              className="shrink-0 p-1.5 rounded-lg text-zinc-700 hover:text-red-400 hover:bg-red-950/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-zinc-700 disabled:hover:bg-transparent"
+            >
+              {isLocal ? (
+                /* Unlink icon (chain-break) */
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+                  <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+                  <line x1="2" y1="2" x2="22" y2="22"/>
+                </svg>
+              ) : (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                  <path d="M10 11v6M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                </svg>
+              )}
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Load error */}
-      {(loadError || repairError) && (
+      {/* Load error / repair error / sync error */}
+      {(loadError || repairError || syncError) && (
         <div className="flex items-start gap-1.5 px-2.5 py-2 rounded-lg bg-red-950/30 border border-red-800/30">
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-400 shrink-0 mt-px">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
-          <p className="text-[10px] text-red-400 break-all">{repairError ?? loadError}</p>
+          <p className="text-[10px] text-red-400 break-all">{syncError ?? repairError ?? loadError}</p>
+        </div>
+      )}
+
+      {/* Local path display */}
+      {isLocal && localPath && (
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-orange-950/20 border border-orange-800/20">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-orange-500/70 shrink-0">
+            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+          </svg>
+          <p className="text-[10px] text-orange-400/70 truncate font-mono" title={localPath}>{localPath}</p>
         </div>
       )}
 
