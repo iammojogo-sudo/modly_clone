@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
+import type { ReactNode } from 'react'
 import { useAppStore } from '@shared/stores/appStore'
 import type { GenerationJob } from '@shared/stores/appStore'
 import { useApi } from '@shared/hooks/useApi'
@@ -42,6 +43,38 @@ function ExportDropdown({
         </button>
       ))}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ToolButton — icon-only toolbar button with tooltip + active state
+// ---------------------------------------------------------------------------
+
+function ToolButton({
+  label,
+  active,
+  onClick,
+  children,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      className={`flex items-center justify-center w-7 h-7 rounded-lg border transition-colors
+        ${active
+          ? 'bg-zinc-700 border-zinc-600 text-zinc-200'
+          : 'bg-zinc-800 border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+        }`}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -278,6 +311,7 @@ export default function GeneratePage(): JSX.Element {
   const [decimating, setDecimating] = useState(false)
   const [smoothing, setSmoothing] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [gizmoMode, setGizmoMode] = useState<'translate' | 'rotate' | 'scale' | null>(null)
   const dragging = useRef(false)
 
   const isGenerating = useAppStore((s) =>
@@ -289,6 +323,7 @@ export default function GeneratePage(): JSX.Element {
   const updateCurrentJob = useAppStore((s) => s.updateCurrentJob)
   const setCurrentJob = useAppStore((s) => s.setCurrentJob)
   const meshStats = useAppStore((s) => s.meshStats)
+  const meshSelected = useAppStore((s) => s.meshSelected)
   const pushMeshUrl = useAppStore((s) => s.pushMeshUrl)
   const undoMesh = useAppStore((s) => s.undoMesh)
   const redoMesh = useAppStore((s) => s.redoMesh)
@@ -307,6 +342,12 @@ export default function GeneratePage(): JSX.Element {
   }, [undoMesh, redoMesh])
 
   const hasModel = currentJob?.status === 'done' && !!currentJob.outputUrl
+
+  // Drop the active transform tool when the mesh is deselected, so it doesn't
+  // silently re-activate on the next selection.
+  useEffect(() => {
+    if (!meshSelected) setGizmoMode(null)
+  }, [meshSelected])
 
   async function handleUnloadAll() {
     await window.electron.model.unloadAll()
@@ -425,6 +466,21 @@ export default function GeneratePage(): JSX.Element {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header bar */}
         <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-surface-400 shrink-0">
+
+          {/* Free memory */}
+          <button
+            onClick={handleUnloadAll}
+            disabled={isGenerating}
+            title="Free model from memory"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border bg-zinc-800 border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+              <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+            </svg>
+            {unloadStatus === 'done' ? 'Freed' : 'Free memory'}
+          </button>
+
+          <div className="w-px h-4 bg-zinc-700/60" />
 
           {/* Undo / Redo */}
           <button
@@ -634,23 +690,54 @@ export default function GeneratePage(): JSX.Element {
           </div>
         </div>
 
+        {/* Tools bar — always visible; transform tools appear once a mesh is selected */}
+        <div className="flex items-center gap-2 px-3 h-10 border-b border-zinc-800 bg-surface-400 shrink-0">
+          {hasModel && meshSelected && (
+            <>
+              <ToolButton
+                label="Move"
+                active={gizmoMode === 'translate'}
+                onClick={() => setGizmoMode((m) => (m === 'translate' ? null : 'translate'))}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                  <polyline points="5 9 2 12 5 15" />
+                  <polyline points="9 5 12 2 15 5" />
+                  <polyline points="15 19 12 22 9 19" />
+                  <polyline points="19 9 22 12 19 15" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <line x1="12" y1="2" x2="12" y2="22" />
+                </svg>
+              </ToolButton>
+              <ToolButton
+                label="Rotate"
+                active={gizmoMode === 'rotate'}
+                onClick={() => setGizmoMode((m) => (m === 'rotate' ? null : 'rotate'))}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                  <path d="M21 2v6h-6" />
+                  <path d="M21 13a9 9 0 1 1-3-7.7L21 8" />
+                </svg>
+              </ToolButton>
+              <ToolButton
+                label="Scale"
+                active={gizmoMode === 'scale'}
+                onClick={() => setGizmoMode((m) => (m === 'scale' ? null : 'scale'))}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                  <path d="M15 3h6v6" />
+                  <path d="M9 21H3v-6" />
+                  <path d="M21 3l-7 7" />
+                  <path d="M3 21l7-7" />
+                </svg>
+              </ToolButton>
+            </>
+          )}
+        </div>
+
         {/* Viewer area */}
         <div className="flex-1 relative overflow-hidden">
           <Viewer3D lightSettings={lightSettings} />
           <GenerationHUD />
-
-          {/* Free memory — overlay top-left */}
-          <button
-            onClick={handleUnloadAll}
-            disabled={isGenerating}
-            title="Free model from memory"
-            className="absolute top-3 left-3 z-20 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-zinc-900/70 border border-zinc-700/50 backdrop-blur-sm text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors disabled:opacity-30 disabled:pointer-events-none"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-              <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
-            </svg>
-            {unloadStatus === 'done' ? 'Freed' : 'Free memory'}
-          </button>
         </div>
       </div>
     </>

@@ -75,6 +75,10 @@ interface AppState {
   meshStats: { vertices: number; triangles: number } | null
   setMeshStats: (stats: { vertices: number; triangles: number } | null) => void
 
+  // Mesh selection (set by Viewer3D click, read by the Generate tools bar)
+  meshSelected: boolean
+  setMeshSelected: (selected: boolean) => void
+
   // Setup
   setupStatus:    SetupStatus
   setupProgress:  SetupProgress | null
@@ -227,6 +231,8 @@ export const useAppStore = create<AppState>()(
       generationOptions: DEFAULT_OPTIONS,
       meshStats: null,
       setMeshStats: (stats) => set({ meshStats: stats }),
+      meshSelected: false,
+      setMeshSelected: (selected) => set({ meshSelected: selected }),
       initApp: async () => {
         set({ backendStatus: 'starting', backendError: null })
 

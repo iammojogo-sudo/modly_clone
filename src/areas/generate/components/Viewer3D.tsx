@@ -389,7 +389,8 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
 
   const [viewMode, setViewMode] = useState<ViewMode>('solid')
   const [autoRotate, setAutoRotate] = useState(false)
-  const [selected, setSelected] = useState(false)
+  const selected = useAppStore((s) => s.meshSelected)
+  const setSelected = useAppStore((s) => s.setMeshSelected)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const modelUrl =
@@ -403,6 +404,10 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
     setViewMode('solid')
     setStoreMeshStats(null)
   }, [modelUrl])
+
+  // Clear the shared selection when the viewer unmounts — the store would
+  // otherwise keep it set and flash a stale selection on the next mount.
+  useEffect(() => () => setSelected(false), [setSelected])
 
   // Delete key removes the model from the scene
   useEffect(() => {
