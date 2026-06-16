@@ -1,7 +1,7 @@
 import { Component, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, ErrorInfo } from 'react'
 import { Canvas, useLoader, useThree } from '@react-three/fiber'
-import { Environment, GizmoHelper, Lightformer, OrbitControls, useGizmoContext, useGLTF } from '@react-three/drei'
+import { Environment, GizmoHelper, Lightformer, OrbitControls, TransformControls, useGizmoContext, useGLTF } from '@react-three/drei'
 import { EffectComposer, Outline, Select, Selection } from '@react-three/postprocessing'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
@@ -13,10 +13,13 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree as any
 THREE.Mesh.prototype.raycast = acceleratedRaycast
 import SplatViewer, { type SplatViewerHandle } from './SplatViewer'
 import { useGeneration } from '@shared/hooks/useGeneration'
+import { useApi } from '@shared/hooks/useApi'
 import { useAppStore } from '@shared/stores/appStore'
 import { ViewerToolbar, type ViewMode } from './ViewerToolbar'
 import type { LightSettings } from '../GeneratePage'
 import { DEFAULT_LIGHT_SETTINGS } from '../GeneratePage'
+
+export type GizmoMode = 'translate' | 'rotate' | 'scale'
 
 const SELECTION_OUTLINE_VISIBLE_COLOR = 0x8b5cf6
 const SELECTION_OUTLINE_HIDDEN_COLOR = 0x5b21b6
@@ -135,13 +138,16 @@ interface MeshModelProps {
   jobId: string
   viewMode: ViewMode
   selected: boolean
+  autoCenter: boolean
+  resetToken: number
   onStats: (stats: { vertices: number; triangles: number }) => void
   onSelect: () => void
+  onObject: (obj: THREE.Object3D | null) => void
 }
 
-function MeshModel({ url, jobId, viewMode, selected, onStats, onSelect }: MeshModelProps): JSX.Element {
+function MeshModel({ url, jobId, viewMode, selected, autoCenter, resetToken, onStats, onSelect, onObject }: MeshModelProps): JSX.Element {
   const extension = url.split('?')[0]?.split('.').pop()?.toLowerCase()
-  const common = { url, jobId, viewMode, selected, onStats, onSelect }
+  const common = { url, jobId, viewMode, selected, autoCenter, resetToken, onStats, onSelect, onObject }
   return extension === 'obj' ? <ObjMeshModel {...common} /> : <GltfMeshModel {...common} />
 }
 
@@ -159,8 +165,11 @@ function SceneMeshModel({
   url,
   viewMode,
   selected,
+  autoCenter,
+  resetToken,
   onStats,
   onSelect,
+  onObject,
   scene,
   loaderType,
 }: MeshModelProps & {
@@ -169,6 +178,12 @@ function SceneMeshModel({
 }): JSX.Element {
   const captured = useRef(false)
   const edgeHelpers = useRef<THREE.LineSegments[]>([])
+
+  // Expose the scene object so Viewer3D can attach the transform gizmo to it.
+  useEffect(() => {
+    onObject(scene)
+    return () => onObject(null)
+  }, [scene, onObject])
 
   // Free GPU resources and loader cache when this model is replaced or unmounted
   useEffect(() => {
@@ -208,17 +223,23 @@ function SceneMeshModel({
     }
   }, [scene])
 
-  // Centre the mesh on the grid
+  // Centre the mesh on the grid.
+  // Only runs on first load / model change (autoCenter) or an explicit Reset
+  // (resetToken) — never on plain re-renders, so a live gizmo transform or a
+  // baked "Apply" pose is not silently overwritten.
   useEffect(() => {
-    // Reset before computing — useGLTF caches the scene with its already-modified position,
-    // which would skew the setFromObject (world space) on a second mount.
-    scene.position.set(0, 0, 0)
-    const box = new THREE.Box3().setFromObject(scene)
-    const center = new THREE.Vector3()
-    box.getCenter(center)
-    scene.position.set(-center.x, -box.min.y, -center.z)
+    if (autoCenter) {
+      // Clear any live gizmo transform before measuring.
+      scene.position.set(0, 0, 0)
+      scene.rotation.set(0, 0, 0)
+      scene.scale.set(1, 1, 1)
+      const box = new THREE.Box3().setFromObject(scene)
+      const center = new THREE.Vector3()
+      box.getCenter(center)
+      scene.position.set(-center.x, -box.min.y, -center.z)
+    }
 
-    // Compute stats
+    // Compute stats (independent of centering)
     let vertices = 0
     let triangles = 0
     scene.traverse((child) => {
@@ -231,7 +252,7 @@ function SceneMeshModel({
     })
     const roundedTriangles = Math.round(triangles)
     onStats({ vertices: Math.round(vertices), triangles: roundedTriangles })
-  }, [scene])
+  }, [scene, autoCenter, resetToken])
 
   // Thumbnail capture (kept for future use)
   useEffect(() => {
@@ -380,13 +401,17 @@ function EmptyState(): JSX.Element {
 // Viewer3D
 // ---------------------------------------------------------------------------
 
-export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { lightSettings?: LightSettings }): JSX.Element {
+export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS, gizmoMode = null }: { lightSettings?: LightSettings; gizmoMode?: GizmoMode | null }): JSX.Element {
   const { currentJob } = useGeneration()
   const apiUrl = useAppStore((s) => s.apiUrl)
 
   const setStoreMeshStats = useAppStore((s) => s.setMeshStats)
   const meshStats = useAppStore((s) => s.meshStats)
   const setCurrentJob = useAppStore((s) => s.setCurrentJob)
+  const updateCurrentJob = useAppStore((s) => s.updateCurrentJob)
+  const pushMeshUrl = useAppStore((s) => s.pushMeshUrl)
+  const showError = useAppStore((s) => s.showError)
+  const { transformMesh } = useApi()
 
   const [viewMode, setViewMode] = useState<ViewMode>('solid')
   const [autoRotate, setAutoRotate] = useState(false)
@@ -395,11 +420,20 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const splatRef = useRef<SplatViewerHandle | null>(null)
 
+  const [meshObject, setMeshObject] = useState<THREE.Object3D | null>(null)
+  const [resetToken, setResetToken] = useState(0)
+  const [applying, setApplying] = useState(false)
+  // URLs whose geometry already has a baked transform — these must NOT be
+  // re-centered on load, so the applied pose is shown verbatim.
+  const appliedUrls = useRef<Set<string>>(new Set())
+
   const outputUrl = currentJob?.outputUrl ?? ''
   const modelUrl =
     currentJob?.status === 'done' && currentJob.outputUrl
       ? `${apiUrl}${currentJob.outputUrl}`
       : null
+
+  const autoCenter = !appliedUrls.current.has(outputUrl)
 
   // A .ply/.splat reaching the viewer is always a Gaussian splat here: mesh
   // plys are converted to GLB on import and workflow mesh outputs are .glb.
@@ -444,6 +478,50 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
     link.download = `modly-${Date.now()}.png`
     link.href = dataUrl
     link.click()
+  }
+
+  const handleResetTransform = () => {
+    const original = currentJob?.originalOutputUrl
+    if (original && currentJob?.outputUrl !== original) {
+      // Was baked via Apply — reload the original (auto-centred on load).
+      updateCurrentJob({ outputUrl: original })
+      pushMeshUrl(original)
+    } else {
+      // Live transform only — re-centre the current scene in place.
+      setResetToken((t) => t + 1)
+    }
+  }
+
+  const handleApplyTransform = async () => {
+    if (!meshObject || !currentJob?.outputUrl) return
+    const url = currentJob.outputUrl
+    if (!url.startsWith('/workspace/')) return
+    const path = url.slice('/workspace/'.length)
+
+    // We bake the full world matrix, which includes the centering offset the
+    // viewer applies on load ("bake what you see"). The result URL is then
+    // flagged so it is NOT re-centered on reload, keeping the visible pose.
+    meshObject.updateWorldMatrix(true, false)
+    const e = meshObject.matrixWorld.elements
+    // THREE stores column-major; emit a row-major 4x4 for the backend.
+    const matrix = [
+      [e[0], e[4], e[8], e[12]],
+      [e[1], e[5], e[9], e[13]],
+      [e[2], e[6], e[10], e[14]],
+      [e[3], e[7], e[11], e[15]],
+    ]
+
+    setApplying(true)
+    try {
+      const result = await transformMesh(path, matrix)
+      appliedUrls.current.add(result.url)
+      updateCurrentJob({ outputUrl: result.url })
+      pushMeshUrl(result.url)
+    } catch (err) {
+      showError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setApplying(false)
+    }
   }
 
 
@@ -504,12 +582,19 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
                   jobId={currentJob.id}
                   viewMode={viewMode}
                   selected={selected}
+                  autoCenter={autoCenter}
+                  resetToken={resetToken}
                   onStats={setStoreMeshStats}
                   onSelect={() => setSelected(true)}
+                  onObject={setMeshObject}
                 />
               </Suspense>
             </Selection>
           ) : null}
+
+          {selected && gizmoMode && meshObject && (
+            <TransformControls object={meshObject} mode={gizmoMode} />
+          )}
 
           <OrbitControls
             makeDefault
@@ -540,6 +625,33 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
             onScreenshot={handleScreenshot}
             showViewModes={!isSplat}
           />
+        )}
+
+        {/* Transform apply/reset — visible while a gizmo tool is active */}
+        {!isSplat && modelUrl && selected && gizmoMode && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 bg-zinc-900/80 border border-zinc-700/60 backdrop-blur-sm rounded-lg px-1.5 py-1">
+            <button
+              onClick={handleApplyTransform}
+              disabled={applying}
+              className="flex items-center gap-1.5 px-2.5 h-7 rounded-md text-xs font-medium bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+              {applying ? 'Applying\u2026' : 'Apply'}
+            </button>
+            <button
+              onClick={handleResetTransform}
+              disabled={applying}
+              className="flex items-center gap-1.5 px-2.5 h-7 rounded-md text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-700/60 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 7v6h6" />
+                <path d="M21 17A9 9 0 0 0 6 10.3L3 13" />
+              </svg>
+              Reset
+            </button>
+          </div>
         )}
 
         {/* Bottom-left stats overlay */}

@@ -12,6 +12,7 @@ except ImportError:
     _pymeshlab = None
     _PYMESHLAB_AVAILABLE = False
 
+import numpy as np
 import trimesh
 import trimesh.visual
 from fastapi import APIRouter, HTTPException, UploadFile, File
@@ -33,6 +34,11 @@ class OptimizeRequest(BaseModel):
 class SmoothRequest(BaseModel):
     path: str        # format: "{collection}/{filename}"
     iterations: int
+
+
+class TransformRequest(BaseModel):
+    path: str                    # format: "{collection}/{filename}"
+    matrix: list[list[float]]    # row-major 4x4 world transform
 
 
 def _require_pymeshlab():
@@ -189,6 +195,34 @@ def smooth_mesh(body: SmoothRequest):
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     result.export(str(output_path))
+
+    rel = output_path.relative_to(WORKSPACE_DIR).as_posix()
+    return {"url": f"/workspace/{rel}"}
+
+
+@router.post("/transform")
+def transform_mesh(body: TransformRequest):
+    # Bake an interactive-gizmo transform into the GLB at scene level so it
+    # persists to export. Pure trimesh — no pymeshlab needed.
+    input_path = _resolve_input_path(body.path)
+
+    matrix = np.asarray(body.matrix, dtype=float)
+    if matrix.shape != (4, 4):
+        raise HTTPException(400, "matrix must be a 4x4 array")
+    if not np.all(np.isfinite(matrix)):
+        raise HTTPException(400, "matrix contains non-finite values")
+
+    # Keep the loaded result as-is (Scene when textured/multi-geometry) so
+    # apply_transform preserves materials and UVs.
+    loaded = trimesh.load(str(input_path))
+    loaded.apply_transform(matrix)
+
+    stem = input_path.stem
+    output_name = f"{stem}_xf_{uuid.uuid4().hex[:8]}.glb"
+    output_dir = input_path.parent if str(input_path).startswith(str(WORKSPACE_DIR.resolve())) else WORKSPACE_DIR / "Workflows"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / output_name
+    loaded.export(str(output_path))
 
     rel = output_path.relative_to(WORKSPACE_DIR).as_posix()
     return {"url": f"/workspace/{rel}"}

@@ -349,6 +349,22 @@ export default function GeneratePage(): JSX.Element {
     if (!meshSelected) setGizmoMode(null)
   }, [meshSelected])
 
+  // Gizmo hotkeys: W/E/R switch tool, Esc exits. Ignored while typing.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const el = document.activeElement as HTMLElement | null
+      if (el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable)) return
+      if (e.key === 'Escape') { setGizmoMode((m) => (m ? null : m)); return }
+      if (!hasModel || !meshSelected) return
+      const k = e.key.toLowerCase()
+      if (k === 'w') setGizmoMode('translate')
+      else if (k === 'e') setGizmoMode('rotate')
+      else if (k === 'r') setGizmoMode('scale')
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [hasModel, meshSelected])
+
   async function handleUnloadAll() {
     await window.electron.model.unloadAll()
     setUnloadStatus('done')
@@ -736,7 +752,7 @@ export default function GeneratePage(): JSX.Element {
 
         {/* Viewer area */}
         <div className="flex-1 relative overflow-hidden">
-          <Viewer3D lightSettings={lightSettings} />
+          <Viewer3D lightSettings={lightSettings} gizmoMode={gizmoMode} />
           <GenerationHUD />
         </div>
       </div>
