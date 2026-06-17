@@ -150,6 +150,13 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('workspace:saveJobMeta', { collection, filename, meta }),
     deleteJob: (collection: string, filename: string): Promise<void> =>
       ipcRenderer.invoke('workspace:deleteJob', { collection, filename }),
+    library: {
+      list: () => ipcRenderer.invoke('workspace:library:list'),
+      read: (request: { workspacePath: string }) =>
+        ipcRenderer.invoke('workspace:library:read', request),
+      open: (request: { workspacePath: string }) =>
+        ipcRenderer.invoke('workspace:library:open', request),
+    },
   },
 
   // Extensions
