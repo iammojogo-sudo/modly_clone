@@ -14,8 +14,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast
 import { useGeneration } from '@shared/hooks/useGeneration'
 import { useAppStore } from '@shared/stores/appStore'
 import { ViewerToolbar, type ViewMode } from './ViewerToolbar'
-import type { LightSettings } from '../GeneratePage'
-import { DEFAULT_LIGHT_SETTINGS } from '../GeneratePage'
+import type { LightSettings } from '@shared/stores/appStore'
+import { DEFAULT_LIGHT_SETTINGS } from '@shared/stores/appStore'
 
 const SELECTION_OUTLINE_VISIBLE_COLOR = 0x8b5cf6
 const SELECTION_OUTLINE_HIDDEN_COLOR = 0x5b21b6
