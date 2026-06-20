@@ -351,7 +351,7 @@ export default function GeneratePage(): JSX.Element {
     if (!meshSelected) setGizmoMode(null)
   }, [meshSelected])
 
-  // Gizmo hotkeys: W/E/R switch tool, Esc exits. Ignored while typing.
+  // Gizmo hotkeys: W move, R rotate, S scale, Esc exits. Ignored while typing.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const el = document.activeElement as HTMLElement | null
@@ -360,8 +360,8 @@ export default function GeneratePage(): JSX.Element {
       if (!hasModel || !meshSelected) return
       const k = e.key.toLowerCase()
       if (k === 'w') setGizmoMode('translate')
-      else if (k === 'e') setGizmoMode('rotate')
-      else if (k === 'r') setGizmoMode('scale')
+      else if (k === 'r') setGizmoMode('rotate')
+      else if (k === 's') setGizmoMode('scale')
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
