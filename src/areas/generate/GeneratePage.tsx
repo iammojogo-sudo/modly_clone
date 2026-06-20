@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { useAppStore } from '@shared/stores/appStore'
-import type { GenerationJob } from '@shared/stores/appStore'
+import { useAppStore, DEFAULT_LIGHT_SETTINGS } from '@shared/stores/appStore'
+import type { GenerationJob, LightSettings } from '@shared/stores/appStore'
 import { useApi } from '@shared/hooks/useApi'
 import { ColorPicker } from '@shared/components/ui'
 import GenerationHUD from './components/GenerationHUD'
@@ -160,20 +160,6 @@ function DecimatePopover({
 // Light popover
 // ---------------------------------------------------------------------------
 
-export interface LightSettings {
-  mainIntensity: number
-  mainColor: string
-  fillIntensity: number
-  fillColor: string
-}
-
-export const DEFAULT_LIGHT_SETTINGS: LightSettings = {
-  mainIntensity: 1.5,
-  mainColor: '#ffffff',
-  fillIntensity: 0.6,
-  fillColor: '#ffffff',
-}
-
 function LightPopover({
   settings,
   onChange,
@@ -307,13 +293,14 @@ export default function GeneratePage(): JSX.Element {
   const [unloadStatus, setUnloadStatus] = useState<'idle' | 'done'>('idle')
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH)
   const [openPanel, setOpenPanel] = useState<'export' | 'decimate' | 'smooth' | 'import' | 'light' | null>(null)
-  const [lightSettings, setLightSettings] = useState<LightSettings>(DEFAULT_LIGHT_SETTINGS)
   const [decimating, setDecimating] = useState(false)
   const [smoothing, setSmoothing] = useState(false)
   const [importing, setImporting] = useState(false)
   const [gizmoMode, setGizmoMode] = useState<'translate' | 'rotate' | 'scale' | null>(null)
   const dragging = useRef(false)
 
+  const lightSettings = useAppStore((s) => s.lightSettings)
+  const setLightSettings = useAppStore((s) => s.setLightSettings)
   const isGenerating = useAppStore((s) =>
     s.currentJob?.status === 'uploading' || s.currentJob?.status === 'generating'
   )
@@ -548,7 +535,7 @@ export default function GeneratePage(): JSX.Element {
                   </svg>
                   <div>
                     <p className="text-xs text-zinc-200">Mesh</p>
-                    <p className="text-[10px] text-zinc-500">.glb .obj .stl .ply</p>
+                    <p className="text-[10px] text-zinc-500">.glb .obj .stl .ply .splat</p>
                   </div>
                 </button>
               </div>

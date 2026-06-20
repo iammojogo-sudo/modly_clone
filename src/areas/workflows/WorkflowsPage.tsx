@@ -675,7 +675,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border border-violet-500/30 bg-violet-500/10 text-violet-400 shrink-0 mt-0.5">mesh</span>
                 <div>
                   <p className="text-[11px] font-medium text-zinc-200">Load 3D Mesh</p>
-                  <p className="text-[11px] text-zinc-500 mt-0.5 leading-relaxed">Source node. Load a .glb, .obj, .stl or .ply file from disk, or use the model currently loaded in the 3D viewer.</p>
+                  <p className="text-[11px] text-zinc-500 mt-0.5 leading-relaxed">Source node. Load a .glb, .obj, .stl, .ply or .splat file from disk, or use the model currently loaded in the 3D viewer.</p>
                 </div>
               </div>
 
@@ -905,9 +905,22 @@ function WorkflowCanvasInner({
   const isValidConnection = useCallback((connection: Connection) => {
     const srcType = getNodeOutputType(getNode(connection.source) as Node, allExtensions)
     const tgtType = getNodeInputType(getNode(connection.target) as Node, connection.targetHandle, allExtensions)
-    if (!srcType || !tgtType) return true  // unknown type — allow
-    return srcType === tgtType
-  }, [getNode, allExtensions])
+    if (srcType && tgtType && srcType !== tgtType) return false  // type mismatch (unknown types allowed)
+    // Reject connections that would create a cycle: if the target can already
+    // reach the source, adding source→target closes a loop.
+    if (connection.source && connection.target) {
+      const stack = [connection.target]
+      const seen  = new Set<string>()
+      while (stack.length > 0) {
+        const id = stack.pop()!
+        if (id === connection.source) return false
+        if (seen.has(id)) continue
+        seen.add(id)
+        for (const e of edges) if (e.source === id) stack.push(e.target)
+      }
+    }
+    return true
+  }, [getNode, allExtensions, edges])
 
   const onConnectStart = useCallback((_: React.MouseEvent | React.TouchEvent, params: OnConnectStartParams) => {
     pendingConnectionRef.current  = params
