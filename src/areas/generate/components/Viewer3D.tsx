@@ -961,6 +961,7 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS, gizmo
           {modelUrl && currentJob ? (
             <Selection enabled={selected}>
               <EffectComposer
+                autoClear={false}
                 multisampling={SELECTION_OUTLINE_MULTISAMPLING}
                 resolutionScale={SELECTION_OUTLINE_RESOLUTION_SCALE}
               >
