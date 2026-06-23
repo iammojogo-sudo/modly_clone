@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { useAppStore, DEFAULT_LIGHT_SETTINGS } from '@shared/stores/appStore'
 import type { GenerationJob, LightSettings } from '@shared/stores/appStore'
+import { useSceneStore } from '@shared/stores/sceneStore'
 import { useApi } from '@shared/hooks/useApi'
 import { ColorPicker } from '@shared/components/ui'
 import GenerationHUD from './components/GenerationHUD'
@@ -597,6 +598,20 @@ export default function GeneratePage(): JSX.Element {
   const redoMesh = useAppStore((s) => s.redoMesh)
   const canUndo = useAppStore((s) => s.historyIndex > 0)
   const canRedo = useAppStore((s) => s.historyIndex < s.meshHistory.length - 1)
+  const showToast = useAppStore((s) => s.showToast)
+  const selectedMeshId = useSceneStore((s) => s.selectedMeshId)
+  const sceneMeshes = useSceneStore((s) => s.meshes)
+  const activeSceneFile = useSceneStore((s) => s.activeSceneFile)
+  const isSceneDirty = useSceneStore((s) => s.isDirty)
+  const addMesh = useSceneStore((s) => s.addMesh)
+  const removeMesh = useSceneStore((s) => s.removeMesh)
+  const updateMesh = useSceneStore((s) => s.updateMesh)
+  const saveScene = useSceneStore((s) => s.saveScene)
+  const loadScene = useSceneStore((s) => s.loadScene)
+  const listScenes = useSceneStore((s) => s.listScenes)
+  const clearScene = useSceneStore((s) => s.clearScene)
+  const setMeshes = useSceneStore((s) => s.setMeshes)
+
   const { optimizeMesh, smoothMesh, importMesh } = useApi()
   const assetLibraryService = useMemo(() => getDefaultAssetLibraryService(), [])
 
@@ -610,13 +625,13 @@ export default function GeneratePage(): JSX.Element {
     return () => window.removeEventListener('keydown', handler)
   }, [undoMesh, redoMesh])
 
-  const hasModel = currentJob?.status === 'done' && !!currentJob.outputUrl
+  const hasModel = (currentJob?.status === 'done' && !!currentJob.outputUrl) || sceneMeshes.length > 0
 
   // Drop the active transform tool when the mesh is deselected, so it doesn't
   // silently re-activate on the next selection.
   useEffect(() => {
-    if (!meshSelected) setGizmoMode(null)
-  }, [meshSelected])
+    if (!meshSelected && selectedMeshId == null) setGizmoMode(null)
+  }, [meshSelected, selectedMeshId])
 
   // Gizmo hotkeys: W move, R rotate, S scale, Esc exits. Ignored while typing.
   useEffect(() => {
@@ -639,6 +654,67 @@ export default function GeneratePage(): JSX.Element {
     void loadLibraryEntries()
   }, [openPanel, libraryLoaded, libraryLoading])
 
+  // Auto-add generated mesh to scene when job completes
+  useEffect(() => {
+    if (currentJob?.status === 'done' && currentJob.outputUrl) {
+      const exists = sceneMeshes.some((m) => m.url === currentJob.outputUrl)
+      if (!exists) {
+        addMesh({
+          name: `Mesh ${sceneMeshes.length + 1}`,
+          url: currentJob.outputUrl,
+          position: [0, 0, 0],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+          visible: true,
+        })
+      }
+    }
+  }, [currentJob?.status, currentJob?.outputUrl])
+
+  // Auto-save every 5 minutes when dirty
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (useSceneStore.getState().isDirty) {
+        useSceneStore.getState().saveScene()
+      }
+    }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Auto-save on visibility change (user switching tabs)
+  useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === 'hidden' && useSceneStore.getState().isDirty) {
+        useSceneStore.getState().saveScene()
+      }
+    }
+    document.addEventListener('visibilitychange', handler)
+    return () => document.removeEventListener('visibilitychange', handler)
+  }, [])
+
+  // Scene save/load popover state
+  const [scenePopover, setScenePopover] = useState<'save' | 'load' | null>(null)
+  const [savedScenes, setSavedScenes] = useState<string[]>([])
+  const [sceneSaveName, setSceneSaveName] = useState('')
+
+  const refreshScenesList = useCallback(async () => {
+    const scenes = await listScenes()
+    setSavedScenes(scenes)
+  }, [listScenes])
+
+  const handleSaveScene = useCallback(async (name?: string) => {
+    await saveScene(name)
+    setScenePopover(null)
+    setSceneSaveName('')
+    showToast('Scene saved')
+  }, [saveScene, showToast])
+
+  const handleLoadScene = useCallback(async (name: string) => {
+    await loadScene(name)
+    setScenePopover(null)
+    showToast('Scene loaded')
+  }, [loadScene, showToast])
+
   async function handleUnloadAll() {
     await window.electron.model.unloadAll()
     setUnloadStatus('done')
@@ -646,13 +722,14 @@ export default function GeneratePage(): JSX.Element {
   }
 
   function handleExport(format: 'glb' | 'obj' | 'stl' | 'ply') {
-    if (!currentJob?.outputUrl) return
+    const url = currentJob?.outputUrl ?? (sceneMeshes.length > 0 ? sceneMeshes[0].url : null)
+    if (!url) return
     const stem = `modly-${Date.now()}`
     const link = document.createElement('a')
     if (format === 'glb') {
-      link.href = `${apiUrl}${currentJob.outputUrl}`
+      link.href = `${apiUrl}${url}`
     } else {
-      const path = encodeURIComponent(currentJob.outputUrl.replace('/workspace/', ''))
+      const path = encodeURIComponent(url.replace('/workspace/', ''))
       link.href = `${apiUrl}/optimize/export?path=${path}&format=${format}`
     }
     link.download = `${stem}.${format}`
@@ -687,6 +764,14 @@ export default function GeneratePage(): JSX.Element {
       }
       setCurrentJob(job)
       pushMeshUrl(url)
+      addMesh({
+        name: `Imported ${filePath.split(/[\\/]/).pop() ?? 'mesh'}`,
+        url,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        visible: true,
+      })
     } finally {
       setImporting(false)
     }
@@ -748,6 +833,18 @@ export default function GeneratePage(): JSX.Element {
       setLibrarySelectedEntryId(result.entry.id)
       setCurrentJob(selection.job)
       pushMeshUrl(selection.historyUrl)
+      if (selection.job.outputUrl) {
+        addMesh({
+          name: selection.job.imageFile
+            ? selection.job.imageFile.split(/[\\/]/).pop() ?? 'Library mesh'
+            : `Library mesh ${sceneMeshes.length + 1}`,
+          url: selection.job.outputUrl,
+          position: [0, 0, 0],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+          visible: true,
+        })
+      }
       setOpenPanel((currentPanel) => resolveOpenPanelAfterLibrarySelection(currentPanel))
     } catch (err) {
       setLibraryError(err instanceof Error ? err.message : String(err))
@@ -757,13 +854,21 @@ export default function GeneratePage(): JSX.Element {
   }
 
   async function handleSmooth(iterations: number) {
-    if (!currentJob?.outputUrl) return
+    const url = currentJob?.outputUrl ?? (sceneMeshes.length > 0 ? sceneMeshes[0].url : null)
+    if (!url) return
     setSmoothing(true)
     try {
-      const path = getOptimizePath(currentJob.outputUrl)
-      const { url } = await smoothMesh(path, iterations)
-      updateCurrentJob({ outputUrl: url })
-      pushMeshUrl(url)
+      const path = getOptimizePath(url)
+      const { url: newUrl } = await smoothMesh(path, iterations)
+      updateCurrentJob({ outputUrl: newUrl })
+      pushMeshUrl(newUrl)
+      // Update scene mesh if it exists
+      const selectedId = useSceneStore.getState().selectedMeshId
+      if (selectedId) {
+        updateMesh(selectedId, { url: newUrl })
+      } else if (sceneMeshes.length > 0) {
+        updateMesh(sceneMeshes[0].id, { url: newUrl })
+      }
       setOpenPanel(null)
     } catch (err) {
       showError(err instanceof Error ? err.message : String(err))
@@ -773,13 +878,21 @@ export default function GeneratePage(): JSX.Element {
   }
 
   async function handleDecimate(targetFaces: number) {
-    if (!currentJob?.outputUrl) return
+    const url = currentJob?.outputUrl ?? (sceneMeshes.length > 0 ? sceneMeshes[0].url : null)
+    if (!url) return
     setDecimating(true)
     try {
-      const path = getOptimizePath(currentJob.outputUrl)
-      const { url } = await optimizeMesh(path, targetFaces)
-      updateCurrentJob({ outputUrl: url })
-      pushMeshUrl(url)
+      const path = getOptimizePath(url)
+      const { url: newUrl } = await optimizeMesh(path, targetFaces)
+      updateCurrentJob({ outputUrl: newUrl })
+      pushMeshUrl(newUrl)
+      // Update scene mesh if it exists
+      const selectedId = useSceneStore.getState().selectedMeshId
+      if (selectedId) {
+        updateMesh(selectedId, { url: newUrl })
+      } else if (sceneMeshes.length > 0) {
+        updateMesh(sceneMeshes[0].id, { url: newUrl })
+      }
       setOpenPanel(null)
     } catch (err) {
       showError(err instanceof Error ? err.message : String(err))
@@ -942,6 +1055,133 @@ export default function GeneratePage(): JSX.Element {
             )}
           </div>
 
+          {/* Scene save/load */}
+          <div className="relative">
+            <button
+              onClick={() => setScenePopover((p) => (p === 'save' ? null : 'save'))}
+              title="Save scene"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors
+                ${scenePopover === 'save'
+                  ? 'bg-zinc-700 border-zinc-600 text-zinc-200'
+                  : 'bg-zinc-800 border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                }`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                <polyline points="17 21 17 13 7 13 7 21" />
+                <polyline points="7 3 7 8 15 8" />
+              </svg>
+              {activeSceneFile ? activeSceneFile.replace('scene-', '') : 'Save'}
+              {isSceneDirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+            </button>
+            {scenePopover === 'save' && (
+              <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-700/60 rounded-xl p-3 flex flex-col gap-3 min-w-[220px] shadow-xl">
+                <p className="text-[10px] text-zinc-500 uppercase tracking-wider">
+                  {activeSceneFile ? `Overwrite "${activeSceneFile}"` : 'Save scene'}
+                </p>
+                <input
+                  type="text"
+                  value={sceneSaveName}
+                  onChange={(e) => setSceneSaveName(e.target.value)}
+                  placeholder={activeSceneFile ?? 'scene-name'}
+                  className="bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 w-full focus:outline-none focus:border-violet-500 transition-colors"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleSaveScene(sceneSaveName || undefined)}
+                    className="flex-1 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs rounded-lg transition-colors font-medium"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setScenePopover(null)}
+                    className="flex-1 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {savedScenes.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    <p className="text-[10px] text-zinc-500">Saved scenes</p>
+                    {savedScenes.map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => {
+                          setSceneSaveName(name)
+                          handleSaveScene(name)
+                        }}
+                        className="text-left text-xs text-zinc-300 hover:text-zinc-100 px-2 py-1 rounded hover:bg-zinc-800 transition-colors"
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => {
+                setScenePopover((p) => (p === 'load' ? null : 'load'))
+                if (scenePopover !== 'load') refreshScenesList()
+              }}
+              title="Load scene"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors
+                ${scenePopover === 'load'
+                  ? 'bg-zinc-700 border-zinc-600 text-zinc-200'
+                  : 'bg-zinc-800 border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                }`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Load
+            </button>
+            {scenePopover === 'load' && (
+              <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-700/60 rounded-xl p-3 flex flex-col gap-3 min-w-[220px] shadow-xl">
+                <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Load scene</p>
+                {savedScenes.length === 0 ? (
+                  <p className="text-xs text-zinc-500">No saved scenes found.</p>
+                ) : (
+                  <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                    {savedScenes.map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => handleLoadScene(name)}
+                        className={`text-left text-xs px-2 py-1.5 rounded transition-colors ${
+                          activeSceneFile === name
+                            ? 'bg-violet-500/20 text-violet-300'
+                            : 'text-zinc-300 hover:bg-zinc-800'
+                        }`}
+                      >
+                        {name}
+                        {activeSceneFile === name && (
+                          <span className="ml-2 text-[10px] text-violet-400">active</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => { clearScene(); setScenePopover(null); showToast('Scene cleared') }}
+                  className="px-3 py-1.5 text-xs text-red-400 hover:text-red-300 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+                >
+                  Clear scene
+                </button>
+                <button
+                  onClick={() => setScenePopover(null)}
+                  className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+
           {hasModel && (
             <>
               <div className="w-px h-4 bg-zinc-700/60" />
@@ -1079,7 +1319,7 @@ export default function GeneratePage(): JSX.Element {
 
         {/* Tools bar — always visible; transform tools appear once a mesh is selected */}
         <div className="flex items-center gap-2 px-3 h-10 border-b border-zinc-800 bg-surface-400 shrink-0">
-          {hasModel && meshSelected && (
+          {hasModel && (meshSelected || selectedMeshId != null) && (
             <>
               <ToolButton
                 label="Move"

@@ -219,6 +219,11 @@ declare global {
           open: (request: AssetLibraryOpenRequest) => Promise<AssetLibraryOpenResult>
         }
       }
+      scene: {
+        save: (data: { filename: string; scene: unknown }) => Promise<{ success: boolean; error?: string }>
+        load: (filename: string) => Promise<{ success: boolean; scene?: unknown; error?: string }>
+        list: () => Promise<string[]>
+      }
       setup: {
         check:        () => Promise<{ needed: boolean; defaultDataDir: string; platform: string; arch: string }>
         run:          () => Promise<{ success: boolean; error?: string }>

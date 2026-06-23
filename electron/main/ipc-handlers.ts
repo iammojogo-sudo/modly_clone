@@ -3,7 +3,7 @@ import { buildSync } from 'esbuild'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { rm as rmAsync, readFile, writeFile, mkdir, readdir, rename, cp, symlink, lstat } from 'fs/promises'
-import { existsSync, readdirSync, statSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import axios from 'axios'
 import * as tar from 'tar'
 import * as os from 'os'
@@ -1341,6 +1341,49 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
       return { success: true }
     } catch (err) {
       return { success: false, error: String(err) }
+    }
+  })
+
+  // ── Scene (3D workspace save/load) ─────────────────────────────────────────
+
+  function scenesDir(): string {
+    const dir = join(getSettings(app.getPath('userData')).workspaceDir, 'scenes')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  ipcMain.handle('scene:save', async (_, { filename, scene }: { filename: string; scene: unknown }) => {
+    try {
+      const path = join(scenesDir(), `${filename}.json`)
+      await writeFile(path, JSON.stringify(scene, null, 2), 'utf-8')
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('scene:load', async (_, filename: string) => {
+    try {
+      const path = join(scenesDir(), `${filename}.json`)
+      if (!existsSync(path)) return { success: false, error: `Scene "${filename}" not found` }
+      const raw = await readFile(path, 'utf-8')
+      return { success: true, scene: JSON.parse(raw) }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('scene:list', async () => {
+    const dir = scenesDir()
+    if (!existsSync(dir)) return []
+    try {
+      return readdirSync(dir)
+        .filter(f => f.endsWith('.json'))
+        .map(f => f.replace('.json', ''))
+        .sort()
+        .reverse()
+    } catch {
+      return []
     }
   })
 }

@@ -251,6 +251,16 @@ export function createElectronApi(ipcRenderer: IpcRendererLike, webFrame: WebFra
       export: (workflow: { id: string; name?: string; [key: string]: unknown }): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('workflows:export', workflow) as Promise<{ success: boolean; error?: string }>,
     },
 
+    // Scene (3D workspace save/load)
+    scene: {
+      save: (data: { filename: string; scene: unknown }): Promise<{ success: boolean; error?: string }> =>
+        ipcRenderer.invoke('scene:save', data) as Promise<{ success: boolean; error?: string }>,
+      load: (filename: string): Promise<{ success: boolean; scene?: unknown; error?: string }> =>
+        ipcRenderer.invoke('scene:load', filename) as Promise<{ success: boolean; scene?: unknown; error?: string }>,
+      list: (): Promise<string[]> =>
+        ipcRenderer.invoke('scene:list') as Promise<string[]>,
+    },
+
     // Auto-updater
     updater: {
       check: (): Promise<{ success: boolean }> =>

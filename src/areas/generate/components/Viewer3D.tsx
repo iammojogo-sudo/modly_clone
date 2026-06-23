@@ -15,6 +15,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast
 import SplatViewer, { type SplatViewerHandle } from './SplatViewer'
 import { useGeneration } from '@shared/hooks/useGeneration'
 import { useAppStore } from '@shared/stores/appStore'
+import { useSceneStore } from '@shared/stores/sceneStore'
+import type { SceneMesh } from '@shared/stores/sceneStore'
 import { ViewerToolbar, type ViewMode } from './ViewerToolbar'
 import type { LightSettings } from '@shared/stores/appStore'
 import { DEFAULT_LIGHT_SETTINGS } from '@shared/stores/appStore'
@@ -801,7 +803,7 @@ function EmptyState(): JSX.Element {
 // Viewer3D
 // ---------------------------------------------------------------------------
 
-type TransformSnapshot = { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 }
+type TransformSnapshot = { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3; meshId: string }
 
 export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS, gizmoMode = null, gizmoUndoRef }: { lightSettings?: LightSettings; gizmoMode?: GizmoMode | null; gizmoUndoRef?: MutableRefObject<(() => boolean) | null> }): JSX.Element {
   const { currentJob } = useGeneration()
@@ -809,66 +811,53 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS, gizmo
 
   const setStoreMeshStats = useAppStore((s) => s.setMeshStats)
   const meshStats = useAppStore((s) => s.meshStats)
-  const setCurrentJob = useAppStore((s) => s.setCurrentJob)
+
+  const sceneMeshes = useSceneStore((s) => s.meshes)
+  const selectedMeshId = useSceneStore((s) => s.selectedMeshId)
+  const setSelectedMesh = useSceneStore((s) => s.setSelectedMesh)
+  const removeMesh = useSceneStore((s) => s.removeMesh)
+  const updateMeshTransform = useSceneStore((s) => s.updateMeshTransform)
 
   const [viewMode, setViewMode] = useState<ViewMode>('solid')
   const [autoRotate, setAutoRotate] = useState(false)
-  const selected = useAppStore((s) => s.meshSelected)
-  const setSelected = useAppStore((s) => s.setMeshSelected)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const splatRef = useRef<SplatViewerHandle | null>(null)
 
-  const [meshObject, setMeshObject] = useState<THREE.Object3D | null>(null)
+  // Map of mesh ID to Object3D for gizmo operations
+  const meshObjects = useRef<Map<string, THREE.Object3D>>(new Map())
 
-  // Local gizmo-transform history (live TRS), undoable with Ctrl+Z. A snapshot
-  // is taken when a drag starts and committed on release only if it changed.
+  // Local gizmo-transform history (live TRS), undoable with Ctrl+Z.
   const transformHistory = useRef<TransformSnapshot[]>([])
   const pendingTransform = useRef<TransformSnapshot | null>(null)
 
-  const outputUrl = currentJob?.outputUrl ?? ''
-  const modelUrl =
-    currentJob?.status === 'done' && currentJob.outputUrl
-      ? `${apiUrl}${currentJob.outputUrl}`
-      : null
-
-  // A .ply/.splat reaching the viewer is always a Gaussian splat here: mesh
-  // plys are converted to GLB on import and workflow mesh outputs are .glb.
-  const isSplat = /\.(ply|splat)$/i.test(outputUrl)
-
-  // The splat viewer needs binary .splat — route raw workspace .ply through the
-  // conversion endpoint; import URLs already point at a .splat via serve-file.
+  const hasSplat = sceneMeshes.some((m) => /\.(ply|splat)$/i.test(m.url))
+  const outputUrl = sceneMeshes.find((m) => /\.(ply|splat)$/i.test(m.url))?.url ?? ''
   const splatUrl = outputUrl.startsWith('/workspace/')
     ? `${apiUrl}/optimize/ply-to-splat?path=${encodeURIComponent(outputUrl.slice('/workspace/'.length))}`
-    : modelUrl
+    : outputUrl ? `${apiUrl}${outputUrl}` : null
 
-  // Reset view state when model changes
-  useEffect(() => {
-    setSelected(false)
-    setViewMode('solid')
-    setStoreMeshStats(null)
-  }, [modelUrl])
+  const hasMeshes = sceneMeshes.length > 0
 
-  // Clear the shared selection when the viewer unmounts — the store would
-  // otherwise keep it set and flash a stale selection on the next mount.
-  useEffect(() => () => setSelected(false), [setSelected])
+  // Clear the shared selection when the viewer unmounts.
+  useEffect(() => () => setSelectedMesh(null), [setSelectedMesh])
 
-  // Delete key removes the model from the scene
+  // Delete key removes the selected mesh from the scene
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Delete') return
       if (document.activeElement instanceof HTMLInputElement) return
-      if (!selected) return
-      setCurrentJob(null)
-      setSelected(false)
+      const id = useSceneStore.getState().selectedMeshId
+      if (id) {
+        removeMesh(id)
+        meshObjects.current.delete(id)
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selected, setCurrentJob])
+  }, [removeMesh])
 
   const handleScreenshot = () => {
-    const dataUrl = isSplat
-      ? splatRef.current?.screenshot() ?? null
-      : canvasRef.current?.toDataURL('image/png') ?? null
+    const dataUrl = canvasRef.current?.toDataURL('image/png') ?? null
     if (!dataUrl) return
     const link = document.createElement('a')
     link.download = `modly-${Date.now()}.png`
@@ -876,38 +865,74 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS, gizmo
     link.click()
   }
 
+  const handleMeshObject = useCallback((meshId: string, obj: THREE.Object3D | null) => {
+    if (obj) {
+      meshObjects.current.set(meshId, obj)
+    } else {
+      meshObjects.current.delete(meshId)
+    }
+  }, [])
+
+  const getSelectedObject = useCallback((): THREE.Object3D | null => {
+    if (!selectedMeshId) return null
+    return meshObjects.current.get(selectedMeshId) ?? null
+  }, [selectedMeshId])
+
+  const selectedObject = getSelectedObject()
+
   // Snapshot the pre-drag pose when a gizmo manipulation starts.
   const handleGizmoDragStart = useCallback(() => {
-    if (meshObject) {
+    const id = useSceneStore.getState().selectedMeshId
+    const obj = id ? meshObjects.current.get(id) : null
+    if (id && obj) {
       pendingTransform.current = {
-        p: meshObject.position.clone(),
-        q: meshObject.quaternion.clone(),
-        s: meshObject.scale.clone(),
+        p: obj.position.clone(),
+        q: obj.quaternion.clone(),
+        s: obj.scale.clone(),
+        meshId: id,
       }
     }
-  }, [meshObject])
+  }, [])
 
   // Commit the snapshot on release, but only if the pose actually changed.
   const handleGizmoDragEnd = useCallback(() => {
     const before = pendingTransform.current
     pendingTransform.current = null
-    if (!before || !meshObject) return
-    const changed = !meshObject.position.equals(before.p)
-      || !meshObject.quaternion.equals(before.q)
-      || !meshObject.scale.equals(before.s)
-    if (changed) transformHistory.current.push(before)
-  }, [meshObject])
+    if (!before) return
+    const obj = meshObjects.current.get(before.meshId)
+    if (!obj) return
+    const changed = !obj.position.equals(before.p)
+      || !obj.quaternion.equals(before.q)
+      || !obj.scale.equals(before.s)
+    if (changed) {
+      transformHistory.current.push(before)
+      // Update the scene store with the new transform
+      updateMeshTransform(
+        before.meshId,
+        [obj.position.x, obj.position.y, obj.position.z],
+        [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+        [obj.scale.x, obj.scale.y, obj.scale.z],
+      )
+    }
+  }, [updateMeshTransform])
 
-  // Revert the most recent gizmo manipulation. Returns false when there is
-  // nothing to undo, so the caller can fall back to the mesh-history undo.
+  // Revert the most recent gizmo manipulation.
   const undoTransform = useCallback((): boolean => {
     const prev = transformHistory.current.pop()
-    if (!prev || !meshObject) return false
-    meshObject.position.copy(prev.p)
-    meshObject.quaternion.copy(prev.q)
-    meshObject.scale.copy(prev.s)
+    if (!prev) return false
+    const obj = meshObjects.current.get(prev.meshId)
+    if (!obj) return false
+    obj.position.copy(prev.p)
+    obj.quaternion.copy(prev.q)
+    obj.scale.copy(prev.s)
+    updateMeshTransform(
+      prev.meshId,
+      [prev.p.x, prev.p.y, prev.p.z],
+      [prev.q.x, prev.q.y, prev.q.z],
+      [prev.s.x, prev.s.y, prev.s.z],
+    )
     return true
-  }, [meshObject])
+  }, [updateMeshTransform])
 
   // Expose transform-undo so the page's Ctrl+Z undoes gizmo edits first.
   useEffect(() => {
@@ -916,18 +941,7 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS, gizmo
     return () => { if (gizmoUndoRef.current === undoTransform) gizmoUndoRef.current = null }
   }, [gizmoUndoRef, undoTransform])
 
-  // Drop the transform history when the model changes.
-  useEffect(() => {
-    transformHistory.current = []
-    pendingTransform.current = null
-  }, [modelUrl])
-
   // Memoise the post-processing stack so its children stay referentially stable.
-  // @react-three/postprocessing rebuilds (recompiles) all EffectPasses whenever the
-  // <EffectComposer> children identity changes; without this, every Viewer3D re-render
-  // (e.g. dragging a Lighting slider) recompiles the outline shader. The Outline still
-  // tracks selection through the <Selection> context, so nothing here needs to depend
-  // on render state.
   const postProcessing = useMemo(() => (
     <EffectComposer
       autoClear={false}
@@ -945,121 +959,154 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS, gizmo
     </EffectComposer>
   ), [])
 
+  // Count total stats across all meshes
+  const totalStats = useMemo(() => {
+    if (!meshStats) return null
+    return meshStats
+  }, [meshStats])
 
   return (
-    <ModelErrorBoundary resetKey={modelUrl} fallback={<ModelLoadError />}>
-      <div className="relative w-full h-full bg-surface-400">
-        {!modelUrl && <EmptyState />}
+    <div className="relative w-full h-full bg-surface-400">
+      {!hasMeshes && <EmptyState />}
 
-        {/* Splat path → fully isolated viewer (mkkellogg, outside R3F) */}
-        {modelUrl && isSplat && splatUrl ? (
-          <SplatViewer ref={splatRef} url={splatUrl} autoRotate={autoRotate} />
-        ) : null}
+      {/* Splat path */}
+      {hasSplat && splatUrl ? (
+        <SplatViewer ref={splatRef} url={splatUrl} autoRotate={autoRotate} />
+      ) : null}
 
-        {/* Mesh path → original Canvas, unchanged */}
-        {!isSplat && (
-        <Canvas
-          onPointerMissed={() => setSelected(false)}
-          camera={{ position: [0, 1.5, 4], fov: 45 }}
-          dpr={[1, 2]}
-          gl={{
-            antialias: true,
-            preserveDrawingBuffer: true,
-            outputColorSpace: THREE.SRGBColorSpace,
-          }}
-        >
-          <color attach="background" args={['#18181b']} />
-          <CanvasCapture domRef={canvasRef} />
-          <ambientLight intensity={lightSettings.ambientIntensity ?? DEFAULT_LIGHT_SETTINGS.ambientIntensity} />
-          <Environment background={false}>
-            <Lightformer intensity={2 * (lightSettings.envIntensity ?? DEFAULT_LIGHT_SETTINGS.envIntensity)} position={[0, 4, 4]} scale={8} />
-            <Lightformer intensity={0.5 * (lightSettings.envIntensity ?? DEFAULT_LIGHT_SETTINGS.envIntensity)} position={[-4, 2, -4]} scale={6} />
-            <Lightformer intensity={0.3 * (lightSettings.envIntensity ?? DEFAULT_LIGHT_SETTINGS.envIntensity)} position={[4, 1, -4]} scale={6} />
-          </Environment>
+      {/* Mesh path */}
+      {hasMeshes && !hasSplat && (
+      <Canvas
+        onPointerMissed={() => setSelectedMesh(null)}
+        camera={{ position: [0, 1.5, 4], fov: 45 }}
+        dpr={[1, 2]}
+        gl={{
+          antialias: true,
+          preserveDrawingBuffer: true,
+          outputColorSpace: THREE.SRGBColorSpace,
+        }}
+      >
+        <color attach="background" args={['#18181b']} />
+        <CanvasCapture domRef={canvasRef} />
+        <ambientLight intensity={lightSettings.ambientIntensity ?? DEFAULT_LIGHT_SETTINGS.ambientIntensity} />
+        <Environment background={false}>
+          <Lightformer intensity={2 * (lightSettings.envIntensity ?? DEFAULT_LIGHT_SETTINGS.envIntensity)} position={[0, 4, 4]} scale={8} />
+          <Lightformer intensity={0.5 * (lightSettings.envIntensity ?? DEFAULT_LIGHT_SETTINGS.envIntensity)} position={[-4, 2, -4]} scale={6} />
+          <Lightformer intensity={0.3 * (lightSettings.envIntensity ?? DEFAULT_LIGHT_SETTINGS.envIntensity)} position={[4, 1, -4]} scale={6} />
+        </Environment>
 
-          <gridHelper args={[10, 20, '#3f3f46', '#27272a']} />
+        <gridHelper args={[10, 20, '#3f3f46', '#27272a']} />
 
-          {modelUrl && currentJob ? (
-            <Selection enabled={selected}>
-              {postProcessing}
-              <Suspense fallback={null}>
-                <directionalLight position={[5, 8, 5]} color={lightSettings.mainColor} intensity={lightSettings.mainIntensity} castShadow />
-                <directionalLight position={[-4, 2, -4]} color={lightSettings.fillColor} intensity={lightSettings.fillIntensity} />
-                <MeshModel
-                  url={modelUrl}
-                  jobId={currentJob.id}
+        {hasMeshes && (
+          <Selection enabled={!!selectedMeshId}>
+            {postProcessing}
+            <Suspense fallback={null}>
+              <directionalLight position={[5, 8, 5]} color={lightSettings.mainColor} intensity={lightSettings.mainIntensity} castShadow />
+              <directionalLight position={[-4, 2, -4]} color={lightSettings.fillColor} intensity={lightSettings.fillIntensity} />
+              {sceneMeshes.filter((m) => !/\.(ply|splat)$/i.test(m.url)).map((mesh) => (
+                <SceneMeshWrapper
+                  key={mesh.id}
+                  mesh={mesh}
+                  apiUrl={apiUrl}
                   viewMode={viewMode}
-                  selected={selected}
+                  isSelected={selectedMeshId === mesh.id}
+                  onSelect={() => setSelectedMesh(mesh.id)}
+                  onObject={(obj) => handleMeshObject(mesh.id, obj)}
                   onStats={setStoreMeshStats}
-                  onSelect={() => setSelected(true)}
-                  onObject={setMeshObject}
                 />
-              </Suspense>
-            </Selection>
-          ) : null}
-
-          {selected && meshObject && gizmoMode === 'translate' && (
-            <TranslateGizmo object={meshObject} onDragStart={handleGizmoDragStart} onDragEnd={handleGizmoDragEnd} />
-          )}
-          {selected && meshObject && gizmoMode === 'rotate' && (
-            <RotateGizmo object={meshObject} onDragStart={handleGizmoDragStart} onDragEnd={handleGizmoDragEnd} />
-          )}
-          {selected && meshObject && gizmoMode === 'scale' && (
-            <ScaleGizmo object={meshObject} onDragStart={handleGizmoDragStart} onDragEnd={handleGizmoDragEnd} />
-          )}
-
-          <OrbitControls
-            makeDefault
-            enablePan
-            enableZoom
-            enableRotate
-            minDistance={0.5}
-            maxDistance={20}
-            autoRotate={autoRotate}
-            autoRotateSpeed={1.5}
-            enableDamping
-            dampingFactor={0.05}
-          />
-
-          <GizmoHelper alignment="top-right" margin={[72, 72]} renderPriority={modelUrl && currentJob ? 2 : 0}>
-            <GizmoBubbles />
-          </GizmoHelper>
-        </Canvas>
+              ))}
+            </Suspense>
+          </Selection>
         )}
 
-        {/* Left toolbar — visible only when a model is loaded */}
-        {modelUrl && (
-          <ViewerToolbar
-            viewMode={viewMode}
-            autoRotate={autoRotate}
-            onViewMode={setViewMode}
-            onAutoRotate={() => setAutoRotate((v) => !v)}
-            onScreenshot={handleScreenshot}
-            showViewModes={!isSplat}
-          />
+        {selectedObject && gizmoMode === 'translate' && (
+          <TranslateGizmo object={selectedObject} onDragStart={handleGizmoDragStart} onDragEnd={handleGizmoDragEnd} />
+        )}
+        {selectedObject && gizmoMode === 'rotate' && (
+          <RotateGizmo object={selectedObject} onDragStart={handleGizmoDragStart} onDragEnd={handleGizmoDragEnd} />
+        )}
+        {selectedObject && gizmoMode === 'scale' && (
+          <ScaleGizmo object={selectedObject} onDragStart={handleGizmoDragStart} onDragEnd={handleGizmoDragEnd} />
         )}
 
-        {/* Bottom-left stats overlay */}
-        {meshStats && (
-          <div className="absolute bottom-4 left-4 pointer-events-none">
-            <p className="text-xs text-zinc-500">
-              {meshStats.triangles.toLocaleString()} tri &bull; {meshStats.vertices.toLocaleString()} verts
-            </p>
-          </div>
-        )}
+        <OrbitControls
+          makeDefault
+          enablePan
+          enableZoom
+          enableRotate
+          minDistance={0.5}
+          maxDistance={20}
+          autoRotate={autoRotate}
+          autoRotateSpeed={1.5}
+          enableDamping
+          dampingFactor={0.05}
+        />
 
-        {/* Bottom-right hint */}
-        {modelUrl && (
-          <div className="absolute bottom-4 right-4 pointer-events-none">
-            <p className="text-xs text-zinc-600">
-              {selected
-                ? <>Click mesh to select &bull; <span className="text-zinc-500">Delete</span> to remove</>
-                : 'Drag to rotate \u2022 Scroll to zoom'
-              }
-            </p>
-          </div>
-        )}
-      </div>
+        <GizmoHelper alignment="top-right" margin={[72, 72]} renderPriority={hasMeshes ? 2 : 0}>
+          <GizmoBubbles />
+        </GizmoHelper>
+      </Canvas>
+      )}
+
+      {/* Left toolbar */}
+      {hasMeshes && (
+        <ViewerToolbar
+          viewMode={viewMode}
+          autoRotate={autoRotate}
+          onViewMode={setViewMode}
+          onAutoRotate={() => setAutoRotate((v) => !v)}
+          onScreenshot={handleScreenshot}
+          showViewModes={!hasSplat}
+        />
+      )}
+
+      {/* Bottom-right hint */}
+      {hasMeshes && (
+        <div className="absolute bottom-4 right-4 pointer-events-none">
+          <p className="text-xs text-zinc-600">
+            {selectedMeshId
+              ? <>Click mesh to select &bull; <span className="text-zinc-500">Delete</span> to remove</>
+              : 'Drag to rotate \u2022 Scroll to zoom'
+            }
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SceneMeshWrapper({
+  mesh,
+  apiUrl,
+  viewMode,
+  isSelected,
+  onSelect,
+  onObject,
+  onStats,
+}: {
+  mesh: SceneMesh
+  apiUrl: string
+  viewMode: ViewMode
+  isSelected: boolean
+  onSelect: () => void
+  onObject: (obj: THREE.Object3D | null) => void
+  onStats: (stats: { vertices: number; triangles: number } | null) => void
+}): JSX.Element {
+  const modelUrl = `${apiUrl}${mesh.url}`
+
+  return (
+    <ModelErrorBoundary resetKey={modelUrl} fallback={null}>
+      <group position={mesh.position} rotation={mesh.rotation} scale={mesh.scale} visible={mesh.visible}>
+        <MeshModel
+          url={modelUrl}
+          jobId={mesh.id}
+          viewMode={viewMode}
+          selected={isSelected}
+          onStats={onStats}
+          onSelect={onSelect}
+          onObject={onObject}
+        />
+      </group>
     </ModelErrorBoundary>
   )
 }
