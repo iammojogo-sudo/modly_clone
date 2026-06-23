@@ -807,7 +807,8 @@ function WorkflowCanvasInner({
   const historyRef  = useRef<Snapshot[]>([{ nodes: workflow.nodes as Node[], edges: workflow.edges as Edge[], name: workflow.name }])
   const histIdxRef  = useRef(0)
   const [histIdx, setHistIdx] = useState(0)
-  const skipPushRef = useRef(true) // skip the initial autosave-triggered push
+  const skipPushRef    = useRef(true) // skip the initial autosave-triggered push
+  const lastSavedAtRef = useRef<string>(workflow.updatedAt)
 
   // Re-sync when workflow switches
   useEffect(() => {
@@ -818,19 +819,34 @@ function WorkflowCanvasInner({
     histIdxRef.current = 0
     setHistIdx(0)
     skipPushRef.current = true
+    lastSavedAtRef.current = workflow.updatedAt
   }, [workflow.id])
 
-  // Auto-save + history push debounced
+  // Re-sync when Generate tab (or another external source) saves param changes
+  useEffect(() => {
+    if (workflow.updatedAt === lastSavedAtRef.current) return
+    setNodes(workflow.nodes as Node[])
+    setEdges(workflow.edges as Edge[])
+    setName(workflow.name)
+    skipPushRef.current = true
+    lastSavedAtRef.current = workflow.updatedAt
+  }, [workflow.updatedAt])
+
+  // Auto-save + history push debounced.
+  // No cleanup return — lets the timer fire even if the user navigates away
+  // before the debounce expires, keeping both tabs in sync.
   useEffect(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
+      const now = new Date().toISOString()
       const updated: Workflow = {
         ...workflow,
         name,
         nodes: nodes as WFNode[],
         edges: edges as WFEdge[],
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       }
+      lastSavedAtRef.current = now
       onSave(updated)
 
       if (!skipPushRef.current) {
@@ -844,7 +860,6 @@ function WorkflowCanvasInner({
       }
       skipPushRef.current = false
     }, 500)
-    return () => { if (saveTimer.current) clearTimeout(saveTimer.current) }
   }, [nodes, edges, name])
 
   const preflightIssues = useMemo(() => {

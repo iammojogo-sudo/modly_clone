@@ -450,6 +450,7 @@ function EmbeddedCanvas({ workflow, allExtensions }: {
   const [edges, setEdges, onEdgesChange] = useEdgesState(workflow.edges as FlowEdge[])
   const { updateNodeData }               = useReactFlow()
   const { navigate }                     = useNavStore()
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Direct patch into controlled nodes state — no React Flow store dependency
   const patchNode = useCallback<PatchFn>((nodeId, patch) => {
@@ -457,6 +458,36 @@ function EmbeddedCanvas({ workflow, allExtensions }: {
       n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n,
     ))
   }, [setNodes])
+
+  // ─── Tab sync ──────────────────────────────────────────────────────────────
+  const lastSyncedAtRef = useRef<string>(workflow.updatedAt)
+  const didMountRef = useRef(false)
+
+  // Sync local state when Workflows tab saves to the store (Workflows→Generate)
+  useEffect(() => {
+    if (workflow.updatedAt === lastSyncedAtRef.current) return
+    setNodes(workflow.nodes as FlowNode[])
+    setEdges(workflow.edges as FlowEdge[])
+    lastSyncedAtRef.current = workflow.updatedAt
+  }, [workflow.updatedAt])
+
+  // Debounced save to the store when local state changes (Generate→Workflows)
+  // No cleanup return — lets the timer fire even if user navigates away
+  useEffect(() => {
+    if (!didMountRef.current) { didMountRef.current = true; return }
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      const now = new Date().toISOString()
+      const updated: Workflow = {
+        ...workflow,
+        nodes: nodes as WFNode[],
+        edges: edges as WFEdge[],
+        updatedAt: now,
+      }
+      lastSyncedAtRef.current = now
+      useWorkflowsStore.getState().save(updated)
+    }, 500)
+  }, [nodes, edges])
 
   const currentMeshUrl = useAppStore((s) => s.currentJob?.outputUrl)
   const showToast = useAppStore((s) => s.showToast)
@@ -659,7 +690,6 @@ export default function WorkflowPanel() {
           {workflow ? (
             <ReactFlowProvider>
               <EmbeddedCanvas
-                key={workflow.id + workflow.updatedAt}
                 workflow={workflow}
                 allExtensions={allExtensions}
               />
