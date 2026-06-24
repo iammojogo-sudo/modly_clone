@@ -309,7 +309,7 @@ function LightPopover({
                 </svg>
               </button>
             </div>
-            <input type="range" min={0} max={4} step={0.1} value={pl.intensity}
+            <input type="range" min={0} max={16} step={0.1} value={pl.intensity}
               onChange={(e) => onPointLightsChange(pointLights.map((p) => p.id === pl.id ? { ...p, intensity: parseFloat(e.target.value) } : p))}
               className="w-full h-1.5 accent-violet-500 cursor-pointer" />
           </div>
