@@ -163,20 +163,20 @@ async function executeExtensionNode(
       if (src.outputType === 'mesh')        nodeInputMeshPath = src.filePath
       else if (src.outputType === 'image')  nodeInputPath     = src.filePath
       else if (src.filePath !== undefined)  nodeInputPath     = src.filePath
-      if (src.text !== undefined)           nodeInputText     = src.text
+      if (src.text !== undefined && src.text.trim().length > 0) nodeInputText = src.text
     }
   } else {
     for (const edge of incomingEdges) {
       const src = resolveSource(edge.source)
       if (src?.filePath !== undefined) nodeInputPath = src.filePath
-      if (src?.text     !== undefined) nodeInputText = src.text
+      if (src?.text !== undefined && src.text.trim().length > 0) nodeInputText = src.text
     }
   }
 
   const isModelNode = ext?.type === 'model'
 
   if (isModelNode) {
-    const isTextInput = ext?.input === 'text' || (ext?.inputs && ext.inputs.every((i) => i === 'text'))
+    const isTextInput = ext?.inputs ? ext.inputs.every((i) => i === 'text') : ext?.input === 'text'
     const activeImagePath = isTextInput ? undefined : (nodeInputPath ?? selectedImagePath)
     if (!isTextInput && !selectedImageData && (!activeImagePath || activeImagePath.trim().length === 0)) {
       throw new Error('No input image selected for model node')
