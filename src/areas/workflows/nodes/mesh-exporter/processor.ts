@@ -195,7 +195,8 @@ const processor = async (
   context.log(`Format: ${format} — input: ${input.filePath}`)
 
   const { NodeIO } = require('@gltf-transform/core')
-  const io = new NodeIO()
+  const { ALL_EXTENSIONS } = require('@gltf-transform/extensions')
+  const io = new NodeIO().registerExtensions(ALL_EXTENSIONS)
 
   context.progress(20, 'Loading mesh…')
   const doc = await io.read(input.filePath)
