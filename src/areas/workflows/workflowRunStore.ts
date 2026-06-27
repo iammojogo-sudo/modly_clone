@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import axios, { AxiosInstance } from 'axios'
 import { useAppStore } from '@shared/stores/appStore'
 import { getWorkflowExtension } from './mockExtensions'
+import { playCompletionSound } from '@shared/utils/sound'
 import type { WorkflowExtension } from './mockExtensions'
 import type { Workflow, WFNode, WFEdge } from '@shared/types/electron.d'
 import { isBranchStarter, isSceneOutput, resolveDataSource, reachesSceneOutput, nearestUpstreamWaits } from './nodeBehaviors'
@@ -392,6 +393,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
       },
     }))
     useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl })
+    playCompletionSound()
   }
 
   return {
