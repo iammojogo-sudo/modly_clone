@@ -852,13 +852,25 @@ function PointLightMarker({
         <pointLight color={light.color} intensity={light.intensity} distance={8} decay={2} />
         <sprite
           scale={[0.3, 0.3, 1]}
-          onPointerDown={(e) => { e.stopPropagation(); onSelect() }}
+          onClick={(e) => { e.stopPropagation(); onSelect() }}
         >
           <spriteMaterial map={iconTexture} toneMapped={false} depthTest={false} />
         </sprite>
       </group>
       {group && isSelected && gizmoMode === 'translate' && (
         <TranslateGizmo
+          object={group}
+          onDragEnd={() => onPositionChange([group.position.x, group.position.y, group.position.z])}
+        />
+      )}
+      {group && isSelected && gizmoMode === 'rotate' && (
+        <RotateGizmo
+          object={group}
+          onDragEnd={() => onPositionChange([group.position.x, group.position.y, group.position.z])}
+        />
+      )}
+      {group && isSelected && gizmoMode === 'scale' && (
+        <ScaleGizmo
           object={group}
           onDragEnd={() => onPositionChange([group.position.x, group.position.y, group.position.z])}
         />

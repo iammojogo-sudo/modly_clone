@@ -193,7 +193,7 @@ function LightPopover({
   onClose,
   pointLights,
   onPointLightsChange,
-  onSelectPointLight,
+  onSelectPointLight: _onSelectPointLight,
 }: {
   settings: LightSettings
   onChange: (s: LightSettings) => void
@@ -692,11 +692,11 @@ export default function GeneratePage(): JSX.Element {
       const el = document.activeElement as HTMLElement | null
       if (el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable)) return
       if (e.key === 'Escape') { setGizmoMode((m) => (m ? null : m)); return }
-      if (!hasModel || (!meshSelected && !selectedPointLightId)) return
+      if (!meshSelected && !selectedPointLightId) return
       const k = e.key.toLowerCase()
       if (k === 'w') setGizmoMode('translate')
-      else if (k === 'r' && meshSelected) setGizmoMode('rotate')
-      else if (k === 's' && meshSelected) setGizmoMode('scale')
+      else if (k === 'r') setGizmoMode('rotate')
+      else if (k === 's') setGizmoMode('scale')
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -1167,32 +1167,28 @@ export default function GeneratePage(): JSX.Element {
                   <line x1="12" y1="2" x2="12" y2="22" />
                 </svg>
               </ToolButton>
-              {meshSelected && (
-                <>
-                  <ToolButton
-                    label="Rotate"
-                    active={gizmoMode === 'rotate'}
-                    onClick={() => setGizmoMode((m) => (m === 'rotate' ? null : 'rotate'))}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-                      <path d="M21 2v6h-6" />
-                      <path d="M21 13a9 9 0 1 1-3-7.7L21 8" />
-                    </svg>
-                  </ToolButton>
-                  <ToolButton
-                    label="Scale"
-                    active={gizmoMode === 'scale'}
-                    onClick={() => setGizmoMode((m) => (m === 'scale' ? null : 'scale'))}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-                      <path d="M15 3h6v6" />
-                      <path d="M9 21H3v-6" />
-                      <path d="M21 3l-7 7" />
-                      <path d="M3 21l7-7" />
-                    </svg>
-                  </ToolButton>
-                </>
-              )}
+              <ToolButton
+                label="Rotate"
+                active={gizmoMode === 'rotate'}
+                onClick={() => setGizmoMode((m) => (m === 'rotate' ? null : 'rotate'))}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                  <path d="M21 2v6h-6" />
+                  <path d="M21 13a9 9 0 1 1-3-7.7L21 8" />
+                </svg>
+              </ToolButton>
+              <ToolButton
+                label="Scale"
+                active={gizmoMode === 'scale'}
+                onClick={() => setGizmoMode((m) => (m === 'scale' ? null : 'scale'))}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                  <path d="M15 3h6v6" />
+                  <path d="M9 21H3v-6" />
+                  <path d="M21 3l-7 7" />
+                  <path d="M3 21l7-7" />
+                </svg>
+              </ToolButton>
             </>
           )}
         </div>
