@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { showErrorNotification } from '@shared/utils/notification'
 
 export type UiScale = 'small' | 'medium' | 'large' | 'very-large'
 export type BackendStatus = 'not_started' | 'starting' | 'ready' | 'error'
@@ -45,6 +44,13 @@ export interface LightSettings {
   fillColor: string
   ambientIntensity: number
   envIntensity: number
+}
+
+export interface PointLight {
+  id: string
+  position: [number, number, number]
+  color: string
+  intensity: number
 }
 
 export interface AppToast {
@@ -148,6 +154,8 @@ interface AppState {
   // 3D viewer lighting
   lightSettings: LightSettings
   setLightSettings: (settings: LightSettings) => void
+  pointLights: PointLight[]
+  setPointLights: (lights: PointLight[]) => void
 
   // Actions
   initApp: () => Promise<void>
@@ -250,6 +258,8 @@ export const useAppStore = create<AppState>()(
 
       lightSettings: DEFAULT_LIGHT_SETTINGS,
       setLightSettings: (settings) => set({ lightSettings: settings }),
+      pointLights: [],
+      setPointLights: (lights) => set({ pointLights: lights }),
 
       currentJob: null,
       selectedImagePath: null,
@@ -291,9 +301,6 @@ export const useAppStore = create<AppState>()(
         const current = get().currentJob
         if (!current) return
         set({ currentJob: { ...current, ...patch } })
-        if (patch.status === 'error') {
-          void showErrorNotification('Generation failed', `Workspace generation failed: ${patch.error ?? 'Unknown error'}`)
-        }
       },
 
       setGenerationOptions: (patch) => {
